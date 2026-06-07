@@ -7,7 +7,6 @@
     <application
         android:name=".MeterReaderApp"
         android:allowBackup="false"
-        android:icon="@mipmap/ic_launcher"
         android:label="西院冷冻机房抄表"
         android:supportsRtl="true"
         android:theme="@style/Theme.MeterReader">
