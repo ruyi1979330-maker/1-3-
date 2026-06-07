@@ -19,11 +19,13 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: 'gradle'
 
-      - name: Fix gradlew line endings and grant execute permission
+      # 直接从 Gradle 官方仓库下载正确的 gradlew 和 wrapper jar
+      - name: Download official Gradle Wrapper
         run: |
-          sed -i 's/\r$//' gradlew
+          mkdir -p gradle/wrapper
+          curl -L https://raw.githubusercontent.com/gradle/gradle/v8.4.0/gradlew -o gradlew
+          curl -L https://raw.githubusercontent.com/gradle/gradle/v8.4.0/gradle/wrapper/gradle-wrapper.jar -o gradle/wrapper/gradle-wrapper.jar
           chmod +x gradlew
 
       - name: Build Debug APK
