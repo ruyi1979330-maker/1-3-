@@ -1,0 +1,113 @@
+package com.zhongshan.meterreader
+
+import com.zhongshan.meterreader.data.DeviceTemplate
+import com.zhongshan.meterreader.data.OcrField
+import com.zhongshan.meterreader.data.RoiRegion
+import com.zhongshan.meterreader.data.ScreenTemplate
+
+object TemplateManager {
+
+    private fun roi(x: Float, y: Float, w: Float, h: Float) = RoiRegion(x, y, w, h)
+    private const val URL_ROOM_1 = "https://appflow.zs-hospital.sh.cn/public/form/dae1b4dba6f94b2bb9ed1d2f4d33b0bc"
+    private const val URL_ROOM_3 = "https://appflow.zs-hospital.sh.cn/public/form/1efd9996ea034ce2b2bc792551c4c6b5"
+
+    private val plateMaps = mapOf(
+        1 to mapOf(
+            "1号楼板交" to "bj1_0", "3号楼板交" to "bj1_1", "备用板交" to "bj1_2",
+            "10号1#板交" to "bj1_3", "10号2#板交" to "bj1_4", "水汀板交" to "bj1_5"
+        ),
+        3 to mapOf("1#板交" to "bj3_0", "2#板交" to "bj3_1")
+    )
+
+    fun getPlateKeywordMap(roomId: Int): Map<String, String> = plateMaps[roomId] ?: emptyMap()
+
+    private fun traneScrewScreens(prefix: Int): List<ScreenTemplate> {
+        val offset = when (prefix) {
+            2 -> 30
+            3 -> 50
+            else -> 0
+        }
+        return listOf(
+            ScreenTemplate("蒸发器", listOf(
+                OcrField("蒸发器进口水温", "field_1_${String.format("%02d", 1 + offset)}", roi(0.72f, 0.25f, 0.18f, 0.09f)),
+                OcrField("蒸发器出口水温", "field_1_${String.format("%02d", 2 + offset)}", roi(0.72f, 0.32f, 0.18f, 0.09f)),
+                OcrField("蒸发器蒸发温度", "field_1_${String.format("%02d", 6 + offset)}", roi(0.72f, 0.39f, 0.18f, 0.09f)),
+                OcrField("蒸发器冷媒压力", "field_1_${String.format("%02d", 5 + offset)}", roi(0.72f, 0.48f, 0.18f, 0.09f))
+            )),
+            ScreenTemplate("冷凝器", listOf(
+                OcrField("冷凝器进口水温", "field_1_${String.format("%02d", 8 + offset)}", roi(0.72f, 0.25f, 0.18f, 0.09f)),
+                OcrField("冷凝器出口水温", "field_1_${String.format("%02d", 9 + offset)}", roi(0.72f, 0.32f, 0.18f, 0.09f)),
+                OcrField("冷凝器冷凝温度", "field_1_${String.format("%02d", 13 + offset)}", roi(0.72f, 0.39f, 0.18f, 0.09f)),
+                OcrField("冷凝器冷媒压力", "field_1_${String.format("%02d", 12 + offset)}", roi(0.72f, 0.48f, 0.18f, 0.09f))
+            )),
+            ScreenTemplate("压缩机与电流", listOf(
+                OcrField("压缩机排出口温度", "field_1_${String.format("%02d", 15 + offset)}", roi(0.72f, 0.40f, 0.18f, 0.08f)),
+                OcrField("压缩机油压", "field_1_${String.format("%02d", 14 + offset)}", roi(0.72f, 0.16f, 0.18f, 0.08f)),
+                OcrField("电机电流(L1)", "field_1_${String.format("%02d", 17 + offset)}", roi(0.32f, 0.72f, 0.15f, 0.10f)),
+                OcrField("主机负载(%RLA)", "field_1_${String.format("%02d", 18 + offset)}", roi(0.32f, 0.64f, 0.15f, 0.10f))
+            ))
+        )
+    }
+
+    private fun yorkCentScreens() = listOf(
+        ScreenTemplate("系统总览", listOf(
+            OcrField("蒸发器进口水温", "field_1_68", roi(0.80f, 0.40f, 0.16f, 0.07f)),
+            OcrField("蒸发器出口水温", "field_1_69", roi(0.80f, 0.32f, 0.16f, 0.07f)),
+            OcrField("蒸发器蒸发温度", "field_1_70", roi(0.80f, 0.92f, 0.16f, 0.06f)),
+            OcrField("蒸发器冷媒压力", "field_1_78", roi(0.80f, 0.86f, 0.16f, 0.06f)),
+            OcrField("冷凝器进口水温", "field_1_79", roi(0.06f, 0.40f, 0.16f, 0.07f)),
+            OcrField("冷凝器出口水温", "field_1_71", roi(0.06f, 0.32f, 0.16f, 0.07f)),
+            OcrField("冷凝器冷凝温度", "field_1_81", roi(0.06f, 0.92f, 0.16f, 0.06f)),
+            OcrField("冷凝器冷媒压力", "field_1_77", roi(0.26f, 0.86f, 0.16f, 0.06f)),
+            OcrField("压缩机排出口温度", "field_1_76", roi(0.26f, 0.16f, 0.16f, 0.06f)),
+            OcrField("压缩机油泵压力", "field_1_74", roi(0.80f, 0.21f, 0.16f, 0.06f)),
+            OcrField("压缩机油箱温度", "field_1_75", roi(0.80f, 0.16f, 0.16f, 0.06f)),
+            OcrField("压缩机导液开度", "field_1_82", roi(0.26f, 0.22f, 0.16f, 0.06f))
+        ))
+    )
+
+    private fun yorkScrewScreens(prefix: Int): List<ScreenTemplate> {
+        val offset = if (prefix == 1) 0 else 30
+        return listOf(
+            ScreenTemplate("系统总览", listOf(
+                OcrField("蒸发器进口水温",   "field_3_${String.format("%02d", 1 + offset)}", roi(0.83f, 0.29f, 0.15f, 0.05f)),
+                OcrField("蒸发器出口水温",   "field_3_${String.format("%02d", 2 + offset)}", roi(0.83f, 0.24f, 0.15f, 0.05f)),
+                OcrField("蒸发器蒸发温度",   "field_3_${String.format("%02d", 6 + offset)}", roi(0.83f, 0.64f, 0.15f, 0.05f)),
+                OcrField("蒸发器冷媒压力",   "field_3_${String.format("%02d", 5 + offset)}", roi(0.83f, 0.59f, 0.15f, 0.05f)),
+                OcrField("冷凝器进口水温",   "field_3_${String.format("%02d", 8 + offset)}", roi(0.09f, 0.29f, 0.15f, 0.05f)),
+                OcrField("冷凝器出口水温",   "field_3_${String.format("%02d", 9 + offset)}", roi(0.09f, 0.24f, 0.15f, 0.05f)),
+                OcrField("冷凝器冷凝温度",   "field_3_${String.format("%02d", 13 + offset)}", roi(0.25f, 0.64f, 0.15f, 0.05f)),
+                OcrField("冷凝器冷媒压力",   "field_3_${String.format("%02d", 12 + offset)}", roi(0.25f, 0.59f, 0.15f, 0.05f)),
+                OcrField("压缩机排出口温度", "field_3_${String.format("%02d", 16 + offset)}", roi(0.83f, 0.14f, 0.15f, 0.05f)),
+                OcrField("压缩机油泵压力",   "field_3_${String.format("%02d", 14 + offset)}", roi(0.25f, 0.14f, 0.15f, 0.05f)),
+                OcrField("压缩机油箱温度",   "field_3_${String.format("%02d", 15 + offset)}", roi(0.25f, 0.18f, 0.15f, 0.05f)),
+                // TODO: 导液开度ROI与蒸发器出口水温重叠(原坐标均为0.83,0.24)，已确认为Bug。
+                // 下方Y坐标 0.44f 为临时占位，需携带面板截图实测后替换。
+                // 实测方法：拍摄约克螺杆完整面板 → 在截图上量取"导液开度"数值区域的上下左右边界 → 换算为百分比。
+                // 修复前此字段识别结果与蒸发器出口水温相同，不可信。
+                OcrField("压缩机导液开度",   "field_3_${String.format("%02d", 17 + offset)}", roi(0.83f, 0.44f, 0.15f, 0.05f))
+            ))
+        )
+    }
+
+    val allTemplates = listOf(
+        DeviceTemplate("1号机房 特灵螺杆1#", "screw_1", 1, URL_ROOM_1, traneScrewScreens(1), listOf("pump_7", "pump_8")),
+        DeviceTemplate("1号机房 特灵螺杆2#", "screw_2", 1, URL_ROOM_1, traneScrewScreens(2), listOf("pump_5", "pump_6")),
+        DeviceTemplate("1号机房 特灵螺杆3#", "screw_3", 1, URL_ROOM_1, traneScrewScreens(3), listOf("pump_3", "pump_4")),
+        DeviceTemplate("1号机房 约克离心机", "cent_1", 1, URL_ROOM_1, yorkCentScreens(), listOf("pump_1", "pump_2")),
+        DeviceTemplate("3号机房 约克螺杆1#", "screw_3_1", 3, URL_ROOM_3, yorkScrewScreens(1)),
+        DeviceTemplate("3号机房 约克螺杆2#", "screw_3_2", 3, URL_ROOM_3, yorkScrewScreens(2)),
+        DeviceTemplate("1号机房 板交(全组)", "hx1_all", 1, URL_ROOM_1, emptyList(), emptyList(), true),
+        DeviceTemplate("3号机房 板交(全组)", "hx3_all", 3, URL_ROOM_3, emptyList(), emptyList(), true)
+    )
+
+    fun findById(machineId: String): DeviceTemplate? = allTemplates.firstOrNull { it.machineId == machineId }
+
+    fun getTabName(template: DeviceTemplate): String {
+        return when {
+            template.isHeatExchanger -> "板交"
+            template.machineId.startsWith("cent_") -> "离心机"
+            else -> "螺杆机"
+        }
+    }
+}
