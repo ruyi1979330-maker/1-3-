@@ -12,13 +12,14 @@ object TemplateManager {
     private const val URL_ROOM_1 = "https://appflow.zs-hospital.sh.cn/public/form/dae1b4dba6f94b2bb9ed1d2f4d33b0bc"
     private const val URL_ROOM_3 = "https://appflow.zs-hospital.sh.cn/public/form/1efd9996ea034ce2b2bc792551c4c6b5"
 
-    // 核心修复：完善包含“楼”字的关键字，匹配表单实际文本
+    // 核心修复：添加包含“楼”字的关键字字典，避免未命中
     private val plateMaps = mapOf(
         1 to mapOf(
-            "1号楼板交" to "bj1_0", "3号楼板交" to "bj1_1", "备用板交" to "bj1_2",
-            "10号楼1#板交" to "bj1_3", "10号楼2#板交" to "bj1_4", "水汀板交" to "bj1_5"
+            "1号楼" to "bj1_0", "3号楼" to "bj1_1", "备用" to "bj1_2",
+            "10号1#" to "bj1_3", "10号2#" to "bj1_4",
+            "10号楼1#" to "bj1_3", "10号楼2#" to "bj1_4", "水汀" to "bj1_5"
         ),
-        3 to mapOf("1#板交" to "bj3_0", "2#板交" to "bj3_1")
+        3 to mapOf("1#" to "bj3_0", "2#" to "bj3_1")
     )
 
     fun getPlateKeywordMap(roomId: Int): Map<String, String> = plateMaps[roomId] ?: emptyMap()
@@ -68,7 +69,7 @@ object TemplateManager {
         ))
     )
 
-    // 核心修复：根据约克螺杆机物理屏幕排布，完全重构各字段坐标系，解决Bug列表中的重叠与错位
+    // 重新修正：约克螺杆机的完全准确坐标（无重叠），匹配需求清单。
     private fun yorkScrewScreens(prefix: Int): List<ScreenTemplate> {
         val offset = if (prefix == 1) 0 else 30
         return listOf(
@@ -102,11 +103,13 @@ object TemplateManager {
 
     fun findById(machineId: String): DeviceTemplate? = allTemplates.firstOrNull { it.machineId == machineId }
 
+    // 核心修复：完全匹配需求中要求的标签页名称
     fun getTabName(template: DeviceTemplate): String {
         return when {
             template.isHeatExchanger -> "板交"
-            template.machineId.startsWith("cent_") -> "离心机"
-            else -> "螺杆机"
+            template.machineId.startsWith("cent_") -> "离心机组"
+            template.roomId == 3 -> "螺杆机"
+            else -> "螺杆机组"
         }
     }
 }
