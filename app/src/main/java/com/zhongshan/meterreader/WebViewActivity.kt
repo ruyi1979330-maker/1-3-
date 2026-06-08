@@ -1,4 +1,137 @@
-private fun compileUltimateInjectionJs(
+package com.zhongshan.meterreader
+
+import android.annotation.SuppressLint
+import android.graphics.Bitmap
+import android.net.http.SslError
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.view.View
+import android.webkit.*
+import androidx.appcompat.app.AppCompatActivity
+import com.zhongshan.meterreader.databinding.ActivityWebviewBinding
+import java.lang.ref.WeakReference
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+
+class WebViewActivity : AppCompatActivity() {
+
+    companion object {
+        private const val WEB_LOAD_TIMEOUT_MS = 15_000L
+    }
+
+    internal lateinit var binding: ActivityWebviewBinding
+    private var targetUrl: String = ""
+    private var targetTabName: String = ""
+    private var injectJsPayload: String = ""
+
+    private val timeoutHandler = Handler(Looper.getMainLooper())
+    private val pageLoadGeneration = AtomicInteger(0)
+    private val isFillNotificationFired = AtomicBoolean(false)
+
+    private fun String.escapeJs(): String =
+        this.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "")
+
+    class SafeWebBridge(activity: WebViewActivity) {
+        private val activityRef = WeakReference(activity)
+
+        @JavascriptInterface
+        fun onFillComplete(count: Int) {
+            activityRef.get()?.runOnUiThread {
+                if (activityRef.get()?.isFillNotificationFired?.compareAndSet(false, true) == true) {
+                    activityRef.get()?.binding?.tvStatusBanner?.visibility = View.VISIBLE
+                    activityRef.get()?.binding?.tvStatusBanner?.text =
+                        "✅ 成功物理填入 $count 个字段！请人工核对后提交。"
+                }
+            }
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        binding = ActivityWebviewBinding.inflate(layoutInflater)
+        setContentView(binding.root)
+
+        targetUrl = intent.getStringExtra("EXTRA_URL") ?: ""
+        targetTabName = intent.getStringExtra("EXTRA_TAB_NAME") ?: "螺杆机"
+        val keys = intent.getStringArrayExtra("EXTRA_KEYS") ?: emptyArray()
+        val values = intent.getStringArrayExtra("EXTRA_VALUES") ?: emptyArray()
+        val pumpIds = intent.getStringArrayExtra("EXTRA_PUMP_IDS") ?: emptyArray()
+
+        injectJsPayload = compileUltimateInjectionJs(targetTabName, keys, values, pumpIds)
+
+        initWebView()
+        if (targetUrl.isNotEmpty()) binding.webView.loadUrl(targetUrl)
+    }
+
+    @SuppressLint("SetJavaScriptEnabled", "WebViewClientOnReceivedSslError")
+    private fun initWebView() {
+        binding.webView.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+        }
+        binding.webView.addJavascriptInterface(SafeWebBridge(this), "AndroidBridge")
+
+        binding.webView.webViewClient = object : WebViewClient() {
+            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                isFillNotificationFired.set(false)
+                binding.tvStatusBanner.visibility = View.GONE
+
+                binding.progressBar.visibility = View.VISIBLE
+                val currentGen = pageLoadGeneration.incrementAndGet()
+                timeoutHandler.postDelayed({
+                    if (pageLoadGeneration.get() == currentGen) {
+                        binding.progressBar.visibility = View.GONE
+                        binding.webView.stopLoading()
+                        binding.layoutNetworkError.visibility = View.VISIBLE
+                        binding.tvErrorMsg.text = "网络超时，请重新进入页面或检查信号。"
+                    }
+                }, WEB_LOAD_TIMEOUT_MS)
+            }
+
+            override fun onPageFinished(view: WebView?, url: String?) {
+                pageLoadGeneration.incrementAndGet()
+                binding.progressBar.visibility = View.GONE
+                val host = android.net.Uri.parse(url ?: "").host ?: ""
+                if (host == "appflow.zs-hospital.sh.cn") {
+                    view?.evaluateJavascript(injectJsPayload, null)
+                }
+            }
+
+            override fun onReceivedError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                error: WebResourceError?
+            ) {
+                if (request?.isForMainFrame == true) {
+                    pageLoadGeneration.incrementAndGet()
+                    binding.progressBar.visibility = View.GONE
+                    binding.layoutNetworkError.visibility = View.VISIBLE
+                    binding.tvErrorMsg.text = "表单加载失败，处于断网容灾模式。"
+                }
+            }
+
+            override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
+                val host = try {
+                    android.net.Uri.parse(error?.url ?: "").host
+                } catch (e: Exception) { null }
+
+                if (host == "appflow.zs-hospital.sh.cn") {
+                    handler?.proceed()
+                } else {
+                    handler?.cancel()
+                }
+            }
+        }
+
+        binding.btnRetryNetwork.setOnClickListener {
+            binding.layoutNetworkError.visibility = View.GONE
+            if (targetUrl.isNotEmpty()) binding.webView.loadUrl(targetUrl)
+        }
+    }
+
+    private fun compileUltimateInjectionJs(
         tabName: String,
         keys: Array<String>,
         values: Array<String>,
@@ -7,7 +140,7 @@ private fun compileUltimateInjectionJs(
         val sb = StringBuilder()
         sb.append("(function() {")
         sb.append("  var tabs = document.querySelectorAll('li, a, button, div, span');")
-        // 核心修复：使用 indexOf > -1 替代 === 进行模糊匹配，兼容带有“组”或“...”的标签文本
+        // 使用 indexOf > -1 替代 === 进行模糊匹配，兼容带有“组”或“...”的标签文本
         sb.append("  for(var i=0; i<tabs.length; i++) { if(tabs[i].innerText && tabs[i].innerText.trim().indexOf('$tabName') > -1) { tabs[i].click(); break; } }")
 
         sb.append("  setTimeout(function() {")
@@ -47,3 +180,16 @@ private fun compileUltimateInjectionJs(
         sb.append("})();")
         return sb.toString()
     }
+
+    override fun onDestroy() {
+        timeoutHandler.removeCallbacksAndMessages(null)
+        binding.webView.removeJavascriptInterface("AndroidBridge")
+        binding.webView.apply {
+            loadUrl("about:blank")
+            stopLoading()
+            clearHistory()
+            destroy()
+        }
+        super.onDestroy()
+    }
+}
