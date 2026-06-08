@@ -99,11 +99,7 @@ class WebViewActivity : AppCompatActivity() {
                 }
             }
 
-            override fun onReceivedError(
-                view: WebView?,
-                request: WebResourceRequest?,
-                error: WebResourceError?
-            ) {
+            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                 if (request?.isForMainFrame == true) {
                     pageLoadGeneration.incrementAndGet()
                     binding.progressBar.visibility = View.GONE
@@ -113,10 +109,7 @@ class WebViewActivity : AppCompatActivity() {
             }
 
             override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
-                val host = try {
-                    android.net.Uri.parse(error?.url ?: "").host
-                } catch (e: Exception) { null }
-
+                val host = try { android.net.Uri.parse(error?.url ?: "").host } catch (e: Exception) { null }
                 if (host == "appflow.zs-hospital.sh.cn") {
                     handler?.proceed()
                 } else {
@@ -140,7 +133,7 @@ class WebViewActivity : AppCompatActivity() {
         val sb = StringBuilder()
         sb.append("(function() {")
         sb.append("  var tabs = document.querySelectorAll('li, a, button, div, span');")
-        // 使用 indexOf > -1 替代 === 进行模糊匹配，兼容带有“组”或“...”的标签文本
+        // 模糊匹配标签页文本
         sb.append("  for(var i=0; i<tabs.length; i++) { if(tabs[i].innerText && tabs[i].innerText.trim().indexOf('$tabName') > -1) { tabs[i].click(); break; } }")
 
         sb.append("  setTimeout(function() {")
@@ -163,7 +156,27 @@ class WebViewActivity : AppCompatActivity() {
             sb.append("}")
         }
         sb.append("        AndroidBridge.onFillComplete(filledCount); return; }")
-        sb.append("      var item = data[index]; var el = document.getElementById(item.k) || document.querySelector('[name=\"'+item.k+'\"]');")
+        
+        // 核心修复：DOM穿透查找逻辑（解析 ID|中文名）
+        sb.append("      var item = data[index];")
+        sb.append("      var idToSearch = item.k; var labelToSearch = '';")
+        sb.append("      if (item.k.indexOf('|') > -1) { var parts = item.k.split('|'); idToSearch = parts[0]; labelToSearch = parts[1]; }")
+        sb.append("      var el = document.getElementById(idToSearch) || document.querySelector('[name=\"'+idToSearch+'\"]');")
+        sb.append("      if (!el && labelToSearch) {")
+        sb.append("        var elements = document.querySelectorAll('label, div, span');")
+        sb.append("        for (var j = 0; j < elements.length; j++) {")
+        sb.append("          if (elements[j].innerText && elements[j].innerText.trim().indexOf(labelToSearch) > -1) {")
+        sb.append("            var parent = elements[j].parentElement; var depth = 0;")
+        sb.append("            while (parent && parent.tagName !== 'BODY' && depth < 5) {")
+        sb.append("              var inputs = parent.querySelectorAll('input:not([type=\"radio\"]):not([type=\"checkbox\"]):not([type=\"hidden\"])');")
+        sb.append("              if (inputs.length > 0) { el = inputs[0]; break; }")
+        sb.append("              parent = parent.parentElement; depth++;")
+        sb.append("            }")
+        sb.append("            if (el) break;")
+        sb.append("          }")
+        sb.append("        }")
+        sb.append("      }")
+
         sb.append("      if(el) {")
         sb.append("        el.focus();")
         sb.append("        var desc = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');")
