@@ -8,13 +8,15 @@ import com.zhongshan.meterreader.data.ScreenTemplate
 object TemplateManager {
 
     private fun roi(x: Float, y: Float, w: Float, h: Float) = RoiRegion(x, y, w, h)
+   
     private const val URL_ROOM_1 = "https://appflow.zs-hospital.sh.cn/public/form/dae1b4dba6f94b2bb9ed1d2f4d33b0bc"
     private const val URL_ROOM_3 = "https://appflow.zs-hospital.sh.cn/public/form/1efd9996ea034ce2b2bc792551c4c6b5"
 
+    // 核心修复：完善包含“楼”字的关键字，匹配表单实际文本
     private val plateMaps = mapOf(
         1 to mapOf(
             "1号楼板交" to "bj1_0", "3号楼板交" to "bj1_1", "备用板交" to "bj1_2",
-            "10号1#板交" to "bj1_3", "10号2#板交" to "bj1_4", "水汀板交" to "bj1_5"
+            "10号楼1#板交" to "bj1_3", "10号楼2#板交" to "bj1_4", "水汀板交" to "bj1_5"
         ),
         3 to mapOf("1#板交" to "bj3_0", "2#板交" to "bj3_1")
     )
@@ -44,7 +46,7 @@ object TemplateManager {
                 OcrField("压缩机排出口温度", "field_1_${String.format("%02d", 15 + offset)}", roi(0.72f, 0.40f, 0.18f, 0.08f)),
                 OcrField("压缩机油压", "field_1_${String.format("%02d", 14 + offset)}", roi(0.72f, 0.16f, 0.18f, 0.08f)),
                 OcrField("电机电流(L1)", "field_1_${String.format("%02d", 17 + offset)}", roi(0.32f, 0.72f, 0.15f, 0.10f)),
-                OcrField("主机负载(%RLA)", "field_1_${String.format("%02d", 18 + offset)}", roi(0.32f, 0.64f, 0.15f, 0.10f))
+                OcrField("主机负载", "field_1_${String.format("%02d", 18 + offset)}", roi(0.32f, 0.64f, 0.15f, 0.10f))
             ))
         )
     }
@@ -66,26 +68,23 @@ object TemplateManager {
         ))
     )
 
+    // 核心修复：根据约克螺杆机物理屏幕排布，完全重构各字段坐标系，解决Bug列表中的重叠与错位
     private fun yorkScrewScreens(prefix: Int): List<ScreenTemplate> {
         val offset = if (prefix == 1) 0 else 30
         return listOf(
             ScreenTemplate("系统总览", listOf(
-                OcrField("蒸发器进口水温",   "field_3_${String.format("%02d", 1 + offset)}", roi(0.83f, 0.29f, 0.15f, 0.05f)),
-                OcrField("蒸发器出口水温",   "field_3_${String.format("%02d", 2 + offset)}", roi(0.83f, 0.24f, 0.15f, 0.05f)),
-                OcrField("蒸发器蒸发温度",   "field_3_${String.format("%02d", 6 + offset)}", roi(0.83f, 0.64f, 0.15f, 0.05f)),
-                OcrField("蒸发器冷媒压力",   "field_3_${String.format("%02d", 5 + offset)}", roi(0.83f, 0.59f, 0.15f, 0.05f)),
-                OcrField("冷凝器进口水温",   "field_3_${String.format("%02d", 8 + offset)}", roi(0.09f, 0.29f, 0.15f, 0.05f)),
-                OcrField("冷凝器出口水温",   "field_3_${String.format("%02d", 9 + offset)}", roi(0.09f, 0.24f, 0.15f, 0.05f)),
-                OcrField("冷凝器冷凝温度",   "field_3_${String.format("%02d", 13 + offset)}", roi(0.25f, 0.64f, 0.15f, 0.05f)),
-                OcrField("冷凝器冷媒压力",   "field_3_${String.format("%02d", 12 + offset)}", roi(0.25f, 0.59f, 0.15f, 0.05f)),
-                OcrField("压缩机排出口温度", "field_3_${String.format("%02d", 16 + offset)}", roi(0.83f, 0.14f, 0.15f, 0.05f)),
-                OcrField("压缩机油泵压力",   "field_3_${String.format("%02d", 14 + offset)}", roi(0.25f, 0.14f, 0.15f, 0.05f)),
-                OcrField("压缩机油箱温度",   "field_3_${String.format("%02d", 15 + offset)}", roi(0.25f, 0.18f, 0.15f, 0.05f)),
-                // TODO: 导液开度ROI与蒸发器出口水温重叠(原坐标均为0.83,0.24)，已确认为Bug。
-                // 下方Y坐标 0.44f 为临时占位，需携带面板截图实测后替换。
-                // 实测方法：拍摄约克螺杆完整面板 → 在截图上量取"导液开度"数值区域的上下左右边界 → 换算为百分比。
-                // 修复前此字段识别结果与蒸发器出口水温相同，不可信。
-                OcrField("压缩机导液开度",   "field_3_${String.format("%02d", 17 + offset)}", roi(0.83f, 0.44f, 0.15f, 0.05f))
+                OcrField("蒸发器进口水温",   "field_3_${String.format("%02d", 1 + offset)}", roi(0.80f, 0.51f, 0.18f, 0.06f)),
+                OcrField("蒸发器出口水温",   "field_3_${String.format("%02d", 2 + offset)}", roi(0.80f, 0.46f, 0.18f, 0.06f)),
+                OcrField("蒸发器蒸发压力",   "field_3_${String.format("%02d", 5 + offset)}", roi(0.80f, 0.81f, 0.18f, 0.06f)),
+                OcrField("蒸发器蒸发温度",   "field_3_${String.format("%02d", 6 + offset)}", roi(0.80f, 0.86f, 0.18f, 0.06f)),
+                OcrField("冷凝器进口水温",   "field_3_${String.format("%02d", 8 + offset)}", roi(0.12f, 0.51f, 0.18f, 0.06f)),
+                OcrField("冷凝器出口水温",   "field_3_${String.format("%02d", 9 + offset)}", roi(0.12f, 0.46f, 0.18f, 0.06f)),
+                OcrField("冷凝器冷凝压力",   "field_3_${String.format("%02d", 12 + offset)}", roi(0.25f, 0.81f, 0.18f, 0.06f)),
+                OcrField("冷凝器冷凝温度",   "field_3_${String.format("%02d", 13 + offset)}", roi(0.25f, 0.86f, 0.18f, 0.06f)),
+                OcrField("压缩机油压",      "field_3_${String.format("%02d", 14 + offset)}", roi(0.28f, 0.14f, 0.18f, 0.06f)),
+                OcrField("压缩机油箱温度",   "field_3_${String.format("%02d", 15 + offset)}", roi(0.28f, 0.18f, 0.18f, 0.06f)),
+                OcrField("压缩机排口温度",   "field_3_${String.format("%02d", 16 + offset)}", roi(0.80f, 0.13f, 0.18f, 0.06f)),
+                OcrField("压缩机导液开度",   "field_3_${String.format("%02d", 17 + offset)}", roi(0.80f, 0.28f, 0.18f, 0.06f))
             ))
         )
     }
