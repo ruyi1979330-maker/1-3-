@@ -133,8 +133,8 @@ class WebViewActivity : AppCompatActivity() {
         val sb = StringBuilder()
         sb.append("(function() {")
         sb.append("  var tabs = document.querySelectorAll('li, a, button, div, span');")
-        // 模糊匹配标签页文本
-        sb.append("  for(var i=0; i<tabs.length; i++) { if(tabs[i].innerText && tabs[i].innerText.trim().indexOf('$tabName') > -1) { tabs[i].click(); break; } }")
+        // 核心修复：将模糊匹配改为精准匹配，防止误触包含整个文本的外层父节点 DOM
+        sb.append("  for(var i=0; i<tabs.length; i++) { if(tabs[i].innerText && tabs[i].innerText.trim() === '$tabName') { tabs[i].click(); break; } }")
 
         sb.append("  setTimeout(function() {")
         sb.append("    var data = [];")
@@ -157,7 +157,7 @@ class WebViewActivity : AppCompatActivity() {
         }
         sb.append("        AndroidBridge.onFillComplete(filledCount); return; }")
         
-        // 核心修复：DOM穿透查找逻辑（解析 ID|中文名）
+        // 核心修复：DOM穿透查找逻辑（解析 ID|中文名），忽略空格差异
         sb.append("      var item = data[index];")
         sb.append("      var idToSearch = item.k; var labelToSearch = '';")
         sb.append("      if (item.k.indexOf('|') > -1) { var parts = item.k.split('|'); idToSearch = parts[0]; labelToSearch = parts[1]; }")
@@ -165,7 +165,7 @@ class WebViewActivity : AppCompatActivity() {
         sb.append("      if (!el && labelToSearch) {")
         sb.append("        var elements = document.querySelectorAll('label, div, span');")
         sb.append("        for (var j = 0; j < elements.length; j++) {")
-        sb.append("          if (elements[j].innerText && elements[j].innerText.trim().indexOf(labelToSearch) > -1) {")
+        sb.append("          if (elements[j].innerText && elements[j].innerText.replace(/\\s+/g, '').indexOf(labelToSearch.replace(/\\s+/g, '')) > -1) {")
         sb.append("            var parent = elements[j].parentElement; var depth = 0;")
         sb.append("            while (parent && parent.tagName !== 'BODY' && depth < 5) {")
         sb.append("              var inputs = parent.querySelectorAll('input:not([type=\"radio\"]):not([type=\"checkbox\"]):not([type=\"hidden\"])');")
