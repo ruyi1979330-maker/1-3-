@@ -22,3 +22,7 @@
 -keepclassmembers class com.zhongshan.meterreader.WebViewActivity$SafeWebBridge {
     @android.webkit.JavascriptInterface <methods>;
 }
+
+# ===== 新增 4：Gson 防误杀完全保留（解决华为HMS系统扫描报错阻断问题） =====
+-keep class com.google.gson.** { *; }
+-keepclassmembers class com.google.gson.** { *; }
