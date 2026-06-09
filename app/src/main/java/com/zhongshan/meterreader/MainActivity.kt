@@ -190,12 +190,13 @@ class MainActivity : AppCompatActivity() {
 
             val aggregatedData = RecognitionResultHolder.getFieldsForMachine(template.machineId)
 
-            // 使用中文字段名显示
+            // 使用中文字段名显示，兼容板交的拼接ID格式
             val labelMap = buildFieldLabelMap(template)
             binding.tvDataPreview.text = aggregatedData.entries
                 .sortedBy { it.key }
                 .joinToString("\n") { (k, v) ->
-                    "  ${labelMap[k] ?: k}：$v"
+                    val displayName = if (k.contains("|")) k.substringAfter("|") else (labelMap[k] ?: k)
+                    "  ${displayName}：$v"
                 }
 
             if (result.isNotEmpty()) {
