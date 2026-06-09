@@ -106,18 +106,19 @@ object OCRUtils {
                 if (matchedKeyword != null) currentBjPrefix = plateKeywordMap[matchedKeyword]
                 if (currentBjPrefix == null) return@forEachIndexed
 
+                // 核心修复：生成带有中文字段名的虚拟ID，供WebView引擎通过DOM文本反向穿透查找
                 if (lineText.contains("进水温度") || lineText.contains("进口温度"))
-                    extractNextNumericValue(textLines, index)?.let { outData["${currentBjPrefix}1"] = it }
+                    extractNextNumericValue(textLines, index)?.let { outData["hx_${currentBjPrefix}_1|${currentBjPrefix} 进水温度"] = it }
                 if (lineText.contains("出水温度") || lineText.contains("出口温度"))
-                    extractNextNumericValue(textLines, index)?.let { outData["${currentBjPrefix}2"] = it }
+                    extractNextNumericValue(textLines, index)?.let { outData["hx_${currentBjPrefix}_2|${currentBjPrefix} 出水温度"] = it }
                 if (lineText.contains("进水压力") || lineText.contains("进口压力"))
-                    extractNextNumericValue(textLines, index)?.let { outData["${currentBjPrefix}3"] = it }
+                    extractNextNumericValue(textLines, index)?.let { outData["hx_${currentBjPrefix}_3|${currentBjPrefix} 进水压力"] = it }
                 if (lineText.contains("出水压力") || lineText.contains("出口压力"))
-                    extractNextNumericValue(textLines, index)?.let { outData["${currentBjPrefix}4"] = it }
+                    extractNextNumericValue(textLines, index)?.let { outData["hx_${currentBjPrefix}_4|${currentBjPrefix} 出水压力"] = it }
                 if (lineText.contains("蒸汽压力"))
-                    extractNextNumericValue(textLines, index)?.let { outData["${currentBjPrefix}5"] = it }
+                    extractNextNumericValue(textLines, index)?.let { outData["hx_${currentBjPrefix}_5|${currentBjPrefix} 蒸汽压力"] = it }
                 if (isRoom1 && lineText.contains("水泵电流"))
-                    extractNextNumericValue(textLines, index)?.let { outData["${currentBjPrefix}6"] = it }
+                    extractNextNumericValue(textLines, index)?.let { outData["hx_${currentBjPrefix}_6|${currentBjPrefix} 水泵电流"] = it }
             }
         } catch (e: Exception) {
             e.printStackTrace()
