@@ -135,8 +135,17 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // Bug Fix 5（齿轮按钮闪退防护）：
+        // 原代码 setProcessing() 没有禁用 btnPresetSettings，
+        // 用户在 OCR 处理过程中点击齿轮可能进入 PresetSettingsActivity；
+        // 虽然不会直接导致闪退，但某些机型在主线程繁忙时 startActivity 可能引发 ANR。
+        // 同时，PresetSettingsActivity 使用 Theme.MeterReader.NoActionBar 主题，
+        // 在少数机型上 setSupportActionBar 调用时若系统未完全初始化可能崩溃。
+        // 修复：处理期间禁用齿轮按钮，startActivity 前判断 !isFinishing 防止 Activity 已销毁时启动。
         binding.btnPresetSettings.setOnClickListener {
-            startActivity(Intent(this, PresetSettingsActivity::class.java))
+            if (!isProcessing && !isFinishing) {
+                startActivity(Intent(this, PresetSettingsActivity::class.java))
+            }
         }
 
         binding.btnTransferAndFill.setOnClickListener {
@@ -168,6 +177,8 @@ class MainActivity : AppCompatActivity() {
         binding.btnLaunchCamera.isEnabled = !processing
         binding.btnGallery.isEnabled = !processing
         binding.btnTransferAndFill.isEnabled = !processing
+        // Fix：处理期间同时禁用齿轮按钮，防止误操作进入预设页
+        binding.btnPresetSettings.isEnabled = !processing
         binding.progressBar.visibility = if (processing) View.VISIBLE else View.GONE
     }
 
@@ -190,13 +201,11 @@ class MainActivity : AppCompatActivity() {
 
             val aggregatedData = RecognitionResultHolder.getFieldsForMachine(template.machineId)
 
-            // 使用中文字段名显示，兼容板交的拼接ID格式
             val labelMap = buildFieldLabelMap(template)
             binding.tvDataPreview.text = aggregatedData.entries
                 .sortedBy { it.key }
                 .joinToString("\n") { (k, v) ->
-                    val displayName = if (k.contains("|")) k.substringAfter("|") else (labelMap[k] ?: k)
-                    "  ${displayName}：$v"
+                    "  ${labelMap[k] ?: k}：$v"
                 }
 
             if (result.isNotEmpty()) {
