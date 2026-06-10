@@ -34,26 +34,37 @@ class MainActivity : AppCompatActivity() {
     // 防重复采集标志
     private var isProcessing = false
 
-    private val cameraPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) launchCamera() else Toast.makeText(this, "需授予相机权限", Toast.LENGTH_SHORT).show()
+    private val cameraPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) launchCamera()
+        else Toast.makeText(this, "需授予相机权限", Toast.LENGTH_SHORT).show()
     }
 
-    private val cameraLauncher = registerForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+    private val cameraLauncher = registerForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { success ->
         if (success && pendingCameraUri != null && !isProcessing) {
             lifecycleScope.launch {
                 setProcessing(true)
-                processImageWithFacade(pendingCameraUri!!)
+                // Bug Fix 1：直接在此协程内 await，不再嵌套 launch，
+                // 确保 setProcessing(false) 在 OCR 真正完成后才执行。
+                processImageSuspend(pendingCameraUri!!)
                 setProcessing(false)
             }
         }
     }
 
-    private val galleryLauncher = registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
+    private val galleryLauncher = registerForActivityResult(
+        ActivityResultContracts.GetMultipleContents()
+    ) { uris ->
         if (uris.isNotEmpty() && !isProcessing) {
             lifecycleScope.launch {
                 setProcessing(true)
+                // Bug Fix 1（续）：processImageSuspend 是 suspend 函数，
+                // for 循环保证串行处理，每张图 OCR 完成才处理下一张。
                 for (uri in uris) {
-                    processImageWithFacade(uri) // suspend 天然串行
+                    processImageSuspend(uri)
                 }
                 setProcessing(false)
             }
@@ -71,7 +82,9 @@ class MainActivity : AppCompatActivity() {
             if (restoredFileName != null) {
                 pendingPhotoFileName = restoredFileName
                 val photoFile = File(cacheDir, restoredFileName)
-                pendingCameraUri = FileProvider.getUriForFile(this, "$packageName.fileprovider", photoFile)
+                pendingCameraUri = FileProvider.getUriForFile(
+                    this, "$packageName.fileprovider", photoFile
+                )
             }
             savedInstanceState.getString("KEY_TEMPLATE_ID")?.let { id ->
                 selectedTemplate = TemplateManager.findById(id)
@@ -97,32 +110,41 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupUI() {
         val names = TemplateManager.allTemplates.map { it.displayName }
-        binding.spinnerDevice.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, names)
+        binding.spinnerDevice.adapter =
+            ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, names)
 
-        val pos = TemplateManager.allTemplates.indexOfFirst { it.machineId == selectedTemplate?.machineId }
+        val pos = TemplateManager.allTemplates.indexOfFirst {
+            it.machineId == selectedTemplate?.machineId
+        }
         if (pos >= 0) binding.spinnerDevice.setSelection(pos)
 
-        binding.spinnerDevice.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                val newTemplate = TemplateManager.allTemplates[position]
-                if (selectedTemplate?.machineId != newTemplate.machineId) {
-                    val oldMachineId = selectedTemplate?.machineId
-                    selectedTemplate = newTemplate
-                    currentScreenIndex = 0
-                    lifecycleScope.launch {
-                        if (oldMachineId != null) {
-                            RecognitionResultHolder.clearMachineData(oldMachineId)
+        binding.spinnerDevice.onItemSelectedListener =
+            object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(
+                    parent: AdapterView<*>?, view: View?, position: Int, id: Long
+                ) {
+                    val newTemplate = TemplateManager.allTemplates[position]
+                    if (selectedTemplate?.machineId != newTemplate.machineId) {
+                        val oldMachineId = selectedTemplate?.machineId
+                        selectedTemplate = newTemplate
+                        currentScreenIndex = 0
+                        lifecycleScope.launch {
+                            if (oldMachineId != null) {
+                                RecognitionResultHolder.clearMachineData(oldMachineId)
+                            }
                         }
+                        binding.tvDataPreview.text =
+                            "已切换至 ${newTemplate.displayName}，请重新采集"
+                        updateScreenProgress()
                     }
-                    binding.tvDataPreview.text = "已切换至 ${newTemplate.displayName}，请重新采集"
-                    updateScreenProgress()
                 }
+                override fun onNothingSelected(p: AdapterView<*>?) {}
             }
-            override fun onNothingSelected(p: AdapterView<*>?) {}
-        }
 
         binding.btnLaunchCamera.setOnClickListener {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                == PackageManager.PERMISSION_GRANTED
+            ) {
                 launchCamera()
             } else {
                 cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
@@ -135,13 +157,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Bug Fix 5（齿轮按钮闪退防护）：
-        // 原代码 setProcessing() 没有禁用 btnPresetSettings，
-        // 用户在 OCR 处理过程中点击齿轮可能进入 PresetSettingsActivity；
-        // 虽然不会直接导致闪退，但某些机型在主线程繁忙时 startActivity 可能引发 ANR。
-        // 同时，PresetSettingsActivity 使用 Theme.MeterReader.NoActionBar 主题，
-        // 在少数机型上 setSupportActionBar 调用时若系统未完全初始化可能崩溃。
-        // 修复：处理期间禁用齿轮按钮，startActivity 前判断 !isFinishing 防止 Activity 已销毁时启动。
         binding.btnPresetSettings.setOnClickListener {
             if (!isProcessing && !isFinishing) {
                 startActivity(Intent(this, PresetSettingsActivity::class.java))
@@ -151,9 +166,12 @@ class MainActivity : AppCompatActivity() {
         binding.btnTransferAndFill.setOnClickListener {
             val template = selectedTemplate ?: return@setOnClickListener
             lifecycleScope.launch {
-                val cachedData = RecognitionResultHolder.getFieldsForMachine(template.machineId)
+                val cachedData =
+                    RecognitionResultHolder.getFieldsForMachine(template.machineId)
                 if (cachedData.isEmpty()) {
-                    Toast.makeText(this@MainActivity, "暂无采集数据", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        this@MainActivity, "暂无采集数据", Toast.LENGTH_SHORT
+                    ).show()
                     return@launch
                 }
 
@@ -177,48 +195,87 @@ class MainActivity : AppCompatActivity() {
         binding.btnLaunchCamera.isEnabled = !processing
         binding.btnGallery.isEnabled = !processing
         binding.btnTransferAndFill.isEnabled = !processing
-        // Fix：处理期间同时禁用齿轮按钮，防止误操作进入预设页
         binding.btnPresetSettings.isEnabled = !processing
         binding.progressBar.visibility = if (processing) View.VISIBLE else View.GONE
     }
 
     private fun launchCamera() {
-        val fileName = "IMG_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}.jpg"
+        val fileName =
+            "IMG_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}.jpg"
         pendingPhotoFileName = fileName
         val photoFile = File(cacheDir, fileName)
-        pendingCameraUri = FileProvider.getUriForFile(this, "$packageName.fileprovider", photoFile)
+        pendingCameraUri =
+            FileProvider.getUriForFile(this, "$packageName.fileprovider", photoFile)
         cameraLauncher.launch(pendingCameraUri!!)
     }
 
-    private fun processImageWithFacade(uri: Uri) {
+    /**
+     * Bug Fix 1（核心）：将原来的普通函数改为 suspend 函数。
+     *
+     * 原代码问题根源：
+     *   processImageWithFacade(uri: Uri) 是普通函数，
+     *   内部调用了 lifecycleScope.launch { ... }，属于"即发即忘"模式。
+     *   调用者 cameraLauncher/galleryLauncher 里的 lifecycleScope.launch 代码：
+     *     setProcessing(true)
+     *     processImageWithFacade(uri)   ← 内部启动新协程后立即返回
+     *     setProcessing(false)          ← OCR 还未完成就已执行！
+     *   导致 isProcessing 防抖机制完全失效：
+     *   - ProgressBar 瞬间消失（用户看不到识别进度）
+     *   - 在 OCR 运行期间可以重复点击相册/拍照，触发并发识别
+     *   - 多图批量处理时 for 循环根本没有等待效果，全部并发触发
+     *
+     * 修复方案：
+     *   将 processImageWithFacade 改为 suspend fun processImageSuspend，
+     *   移除内部的 lifecycleScope.launch，直接 await OCR 结果。
+     *   调用方不再需要嵌套 launch，setProcessing(false) 严格在 OCR 完成后执行。
+     *
+     * 日志证据（meterreader_log_20260610_111413.txt）：
+     *   每次相册选图后 MediaProvider openTypedAssetFileCommon 正常被调用，
+     *   说明图片可以正确读取，但 isProcessing 保护因过早复位而失效。
+     */
+    private suspend fun processImageSuspend(uri: Uri) {
         val template = selectedTemplate ?: return
-        lifecycleScope.launch {
-            val result = OCRFacade.performSmartOcr(this@MainActivity, uri, template, currentScreenIndex)
 
-            if (result.isNotEmpty()) {
-                RecognitionResultHolder.saveFieldsForMachine(template.machineId, result)
+        val result = OCRFacade.performSmartOcr(
+            this@MainActivity, uri, template, currentScreenIndex
+        )
+
+        if (result.isNotEmpty()) {
+            RecognitionResultHolder.saveFieldsForMachine(template.machineId, result)
+        }
+
+        val aggregatedData =
+            RecognitionResultHolder.getFieldsForMachine(template.machineId)
+
+        val labelMap = buildFieldLabelMap(template)
+        binding.tvDataPreview.text = aggregatedData.entries
+            .sortedBy { it.key }
+            .joinToString("\n") { (k, v) ->
+                "  ${labelMap[k] ?: k}：$v"
             }
 
-            val aggregatedData = RecognitionResultHolder.getFieldsForMachine(template.machineId)
-
-            val labelMap = buildFieldLabelMap(template)
-            binding.tvDataPreview.text = aggregatedData.entries
-                .sortedBy { it.key }
-                .joinToString("\n") { (k, v) ->
-                    "  ${labelMap[k] ?: k}：$v"
-                }
-
-            if (result.isNotEmpty()) {
-                if (!template.isHeatExchanger && currentScreenIndex < template.screens.size - 1) {
-                    currentScreenIndex++
-                    Toast.makeText(this@MainActivity, "第${currentScreenIndex}屏采集成功，请拍摄下一屏", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(this@MainActivity, "设备全部数据已采集完成！", Toast.LENGTH_LONG).show()
-                }
-                updateScreenProgress()
+        if (result.isNotEmpty()) {
+            if (!template.isHeatExchanger &&
+                currentScreenIndex < template.screens.size - 1
+            ) {
+                currentScreenIndex++
+                Toast.makeText(
+                    this@MainActivity,
+                    "第${currentScreenIndex}屏采集成功，请拍摄下一屏",
+                    Toast.LENGTH_SHORT
+                ).show()
             } else {
-                Toast.makeText(this@MainActivity, "未识别到有效数据", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this@MainActivity,
+                    "设备全部数据已采集完成！",
+                    Toast.LENGTH_LONG
+                ).show()
             }
+            updateScreenProgress()
+        } else {
+            Toast.makeText(
+                this@MainActivity, "未识别到有效数据", Toast.LENGTH_SHORT
+            ).show()
         }
     }
 
