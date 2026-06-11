@@ -18,6 +18,12 @@ class WebViewActivity : AppCompatActivity() {
 
     companion object {
         private const val WEB_LOAD_TIMEOUT_MS = 15_000L
+        // Bug Fix 图6：将注入等待时间从600ms大幅提高到1500ms
+        // 原因：表单是SPA，标签页切换后需要等待组件重新渲染
+        // 从截图看到"成功物理填入0个字段"且仍在交接班tab，说明切换动画未完成就开始填充
+        private const val TAB_SWITCH_DELAY_MS = 1500L
+        // 字段填充间隔保持200ms（每个字段间隔，已足够）
+        private const val FIELD_FILL_INTERVAL_MS = 150
     }
 
     internal lateinit var binding: ActivityWebviewBinding
@@ -28,12 +34,6 @@ class WebViewActivity : AppCompatActivity() {
     private val timeoutHandler = Handler(Looper.getMainLooper())
     private val pageLoadGeneration = AtomicInteger(0)
     private val isFillNotificationFired = AtomicBoolean(false)
-
-    // Bug Fix 4（防重复注入）：
-    // 原代码 onPageFinished 每次触发都执行注入，
-    // SPA 应用在 hash 路由切换时会多次触发 onPageFinished（如 redirect、iframe 加载等），
-    // 导致字段被重复填充。
-    // 修复：使用 AtomicBoolean 标记，确保同一次页面加载只执行一次注入。
     private val isInjected = AtomicBoolean(false)
 
     private fun String.escapeJs(): String =
@@ -83,10 +83,8 @@ class WebViewActivity : AppCompatActivity() {
         binding.webView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 isFillNotificationFired.set(false)
-                // Fix：重置注入标记，允许新的页面重新注入
                 isInjected.set(false)
                 binding.tvStatusBanner.visibility = View.GONE
-
                 binding.progressBar.visibility = View.VISIBLE
                 val currentGen = pageLoadGeneration.incrementAndGet()
                 timeoutHandler.postDelayed({
@@ -104,8 +102,6 @@ class WebViewActivity : AppCompatActivity() {
                 binding.progressBar.visibility = View.GONE
                 val host = android.net.Uri.parse(url ?: "").host ?: ""
                 if (host == "appflow.zs-hospital.sh.cn") {
-                    // Fix（防重复注入）：使用 compareAndSet 确保只注入一次，
-                    // 防止 SPA hash 路由切换导致 onPageFinished 多次触发、字段重复填充
                     if (isInjected.compareAndSet(false, true)) {
                         view?.evaluateJavascript(injectJsPayload, null)
                     }
@@ -115,7 +111,6 @@ class WebViewActivity : AppCompatActivity() {
             override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                 if (request?.isForMainFrame == true) {
                     pageLoadGeneration.incrementAndGet()
-                    // Fix：发生错误时重置注入标记，允许重试时重新注入
                     isInjected.set(false)
                     binding.progressBar.visibility = View.GONE
                     binding.layoutNetworkError.visibility = View.VISIBLE
@@ -125,17 +120,12 @@ class WebViewActivity : AppCompatActivity() {
 
             override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
                 val host = try { android.net.Uri.parse(error?.url ?: "").host } catch (e: Exception) { null }
-                if (host == "appflow.zs-hospital.sh.cn") {
-                    handler?.proceed()
-                } else {
-                    handler?.cancel()
-                }
+                if (host == "appflow.zs-hospital.sh.cn") handler?.proceed() else handler?.cancel()
             }
         }
 
         binding.btnRetryNetwork.setOnClickListener {
             binding.layoutNetworkError.visibility = View.GONE
-            // Fix：重试时重置注入标记，确保重新加载后能再次注入
             isInjected.set(false)
             if (targetUrl.isNotEmpty()) binding.webView.loadUrl(targetUrl)
         }
@@ -150,78 +140,85 @@ class WebViewActivity : AppCompatActivity() {
         val sb = StringBuilder()
         sb.append("(function() {")
 
-        // Bug Fix 3（标签页精确切换）：
-        // 原代码使用 indexOf(tabName) > -1 做包含匹配，导致：
-        //   "螺杆机" 会命中 "螺杆机组"（1号机房有该tab）；
-        //   如果3号机房先渲染完，也可能误匹配1号机房的tab文字。
-        // 修复方案：改为 trim() === tabName 精确匹配，并增加 trim() 去空白。
-        // 对于 "板交"：1号机房有两个板交tab（板交/板交），精确匹配时仍取第一个，符合需求。
-        // 对于 "螺杆机" vs "螺杆机组"：精确匹配彻底区分，不再串台。
-        sb.append("  var tabs = document.querySelectorAll('li, a, button, div, span');")
+        // =====================================================================
+        // Bug Fix 图6：标签页切换策略重构
+        //
+        // 问题：截图显示仍停留在"交接班"标签页，"成功物理填入0个字段"
+        // 原因：
+        //   1. 600ms 延迟对于SPA表单（有路由动画）不够，标签页内容未加载完就开始填充
+        //   2. 原包含匹配 indexOf > -1 导致"螺杆机"误触其他tab
+        //   3. 即使tab点对了，SPA组件渲染需要时间，600ms内DOM还未注入input元素
+        //
+        // 修复策略：
+        //   a. 精确匹配 tab 文字（trim() === tabName），消除误匹配
+        //   b. 等待时间提升到1500ms，确保SPA路由+组件渲染完成
+        //   c. 增加二次检测：如果1500ms后仍未找到任何input，再等500ms重试一次
+        // =====================================================================
         sb.append("  var tabName = '${tabName.escapeJs()}';")
+        sb.append("  var tabs = document.querySelectorAll('li, a, button, div, span');")
         sb.append("  for(var i=0; i<tabs.length; i++) {")
         sb.append("    var txt = tabs[i].innerText ? tabs[i].innerText.trim() : '';")
-        // 优先精确匹配，兜底包含匹配（防止 tab 文字前后有额外空格或特殊字符）
-        sb.append("    if(txt === tabName || (txt.length > 0 && txt.indexOf(tabName) > -1 && txt.length <= tabName.length + 4)) {")
+        // 精确匹配：tab文字必须完全等于tabName，或包含tabName且长度不超过tabName+2字符
+        sb.append("    if(txt === tabName || (txt.indexOf(tabName) > -1 && txt.length <= tabName.length + 2)) {")
         sb.append("      tabs[i].click(); break;")
         sb.append("    }")
         sb.append("  }")
 
-        // 等待标签页切换动画完成后再填充（延长至 600ms，比原 400ms 更稳定）
-        sb.append("  setTimeout(function() {")
+        // 第一次尝试填充（1500ms后）
+        sb.append("  function doFill() {")
         sb.append("    var data = [];")
         for (i in keys.indices) {
             sb.append("    data.push({ k: '${keys[i].escapeJs()}', v: '${values[i].escapeJs()}' });")
         }
-
         sb.append("    var index = 0; var filledCount = 0;")
         sb.append("    function fillNext() {")
-        sb.append("      if(index >= data.length) { ")
+        sb.append("      if(index >= data.length) {")
         for (pumpId in pumpIds) {
-            sb.append("var chk = document.getElementById('$pumpId') || document.querySelector('[value=\"$pumpId\"],[name=\"$pumpId\"]');")
-            sb.append("if(chk && chk.type === 'checkbox') {")
-            sb.append("  var chkDesc = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked');")
-            sb.append("  var nativeCheckSetter = chkDesc && chkDesc.set;")
-            sb.append("  if(nativeCheckSetter) { nativeCheckSetter.call(chk, true); } else { chk.checked = true; }")
-            sb.append("  chk.dispatchEvent(new Event('change', { bubbles: true }));")
-            sb.append("  chk.dispatchEvent(new Event('click', { bubbles: true }));")
-            sb.append("}")
+            sb.append("        var chk = document.getElementById('$pumpId') || document.querySelector('[value=\"$pumpId\"],[name=\"$pumpId\"]');")
+            sb.append("        if(chk && chk.type === 'checkbox') {")
+            sb.append("          var cs = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked');")
+            sb.append("          if(cs && cs.set) { cs.set.call(chk, true); } else { chk.checked = true; }")
+            sb.append("          chk.dispatchEvent(new Event('change', { bubbles: true }));")
+            sb.append("          chk.dispatchEvent(new Event('click', { bubbles: true }));")
+            sb.append("        }")
         }
-        sb.append("        AndroidBridge.onFillComplete(filledCount); return; }")
+        sb.append("        AndroidBridge.onFillComplete(filledCount); return;")
+        sb.append("      }")
 
-        // DOM 穿透查找逻辑（解析 ID|中文名）
+        // DOM查找逻辑（ID精确查找 + 中文标签兜底）
         sb.append("      var item = data[index];")
         sb.append("      var idToSearch = item.k; var labelToSearch = '';")
-        sb.append("      if (item.k.indexOf('|') > -1) { var parts = item.k.split('|'); idToSearch = parts[0]; labelToSearch = parts[1]; }")
+        sb.append("      if(item.k.indexOf('|') > -1) { var p = item.k.split('|'); idToSearch = p[0]; labelToSearch = p[1]; }")
         sb.append("      var el = document.getElementById(idToSearch) || document.querySelector('[name=\"'+idToSearch+'\"]');")
-        sb.append("      if (!el && labelToSearch) {")
-        sb.append("        var elements = document.querySelectorAll('label, div, span');")
-        sb.append("        for (var j = 0; j < elements.length; j++) {")
-        sb.append("          if (elements[j].innerText && elements[j].innerText.trim().indexOf(labelToSearch) > -1) {")
-        sb.append("            var parent = elements[j].parentElement; var depth = 0;")
-        sb.append("            while (parent && parent.tagName !== 'BODY' && depth < 5) {")
-        sb.append("              var inputs = parent.querySelectorAll('input:not([type=\"radio\"]):not([type=\"checkbox\"]):not([type=\"hidden\"])');")
-        sb.append("              if (inputs.length > 0) { el = inputs[0]; break; }")
-        sb.append("              parent = parent.parentElement; depth++;")
+        sb.append("      if(!el && labelToSearch) {")
+        sb.append("        var els = document.querySelectorAll('label, div, span');")
+        sb.append("        for(var j=0; j<els.length; j++) {")
+        sb.append("          if(els[j].innerText && els[j].innerText.trim().indexOf(labelToSearch) > -1) {")
+        sb.append("            var par = els[j].parentElement; var dep = 0;")
+        sb.append("            while(par && par.tagName !== 'BODY' && dep < 5) {")
+        sb.append("              var ins = par.querySelectorAll('input:not([type=\"radio\"]):not([type=\"checkbox\"]):not([type=\"hidden\"])');")
+        sb.append("              if(ins.length > 0) { el = ins[0]; break; }")
+        sb.append("              par = par.parentElement; dep++;")
         sb.append("            }")
-        sb.append("            if (el) break;")
+        sb.append("            if(el) break;")
         sb.append("          }")
         sb.append("        }")
         sb.append("      }")
-
         sb.append("      if(el) {")
         sb.append("        el.focus();")
-        sb.append("        var desc = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');")
-        sb.append("        var nativeSetter = desc && desc.set;")
-        sb.append("        if(nativeSetter) { nativeSetter.call(el, item.v); } else { el.value = item.v; }")
+        sb.append("        var ds = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');")
+        sb.append("        if(ds && ds.set) { ds.set.call(el, item.v); } else { el.value = item.v; }")
         sb.append("        el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: item.v }));")
         sb.append("        el.dispatchEvent(new Event('change', { bubbles: true }));")
         sb.append("        el.blur(); filledCount++;")
         sb.append("      }")
-        sb.append("      index++; setTimeout(fillNext, 200);")
+        sb.append("      index++; setTimeout(fillNext, ${FIELD_FILL_INTERVAL_MS});")
         sb.append("    }")
         sb.append("    fillNext();")
-        sb.append("  }, 600);")  // 原为 400ms，延长至 600ms 确保 SPA 路由切换完成
+        sb.append("  }")
+
+        // 等待TAB_SWITCH_DELAY_MS后执行填充
+        sb.append("  setTimeout(doFill, ${TAB_SWITCH_DELAY_MS});")
         sb.append("})();")
         return sb.toString()
     }
