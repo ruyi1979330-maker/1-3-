@@ -17,13 +17,3 @@ data class ScreenTemplate(
     val screenName: String,
     val fields: List<OcrField>
 )
-
-data class DeviceTemplate(
-    val displayName: String,
-    val machineId: String,
-    val roomId: Int,
-    val formUrl: String,
-    val screens: List<ScreenTemplate>,
-    val pumpFieldIds: List<String> = emptyList(),
-    val isHeatExchanger: Boolean = false
-)
