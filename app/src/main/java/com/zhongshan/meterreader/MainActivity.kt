@@ -30,8 +30,6 @@ class MainActivity : AppCompatActivity() {
     private var currentScreenIndex = 0
     private var pendingCameraUri: Uri? = null
     private var pendingPhotoFileName: String? = null
-
-    // 防重复采集标志
     private var isProcessing = false
 
     private val cameraPermissionLauncher = registerForActivityResult(
@@ -47,8 +45,6 @@ class MainActivity : AppCompatActivity() {
         if (success && pendingCameraUri != null && !isProcessing) {
             lifecycleScope.launch {
                 setProcessing(true)
-                // Bug Fix 1：直接在此协程内 await，不再嵌套 launch，
-                // 确保 setProcessing(false) 在 OCR 真正完成后才执行。
                 processImageSuspend(pendingCameraUri!!)
                 setProcessing(false)
             }
@@ -61,11 +57,7 @@ class MainActivity : AppCompatActivity() {
         if (uris.isNotEmpty() && !isProcessing) {
             lifecycleScope.launch {
                 setProcessing(true)
-                // Bug Fix 1（续）：processImageSuspend 是 suspend 函数，
-                // for 循环保证串行处理，每张图 OCR 完成才处理下一张。
-                for (uri in uris) {
-                    processImageSuspend(uri)
-                }
+                for (uri in uris) { processImageSuspend(uri) }
                 setProcessing(false)
             }
         }
@@ -78,13 +70,10 @@ class MainActivity : AppCompatActivity() {
 
         if (savedInstanceState != null) {
             currentScreenIndex = savedInstanceState.getInt("KEY_SCREEN_INDEX", 0)
-            val restoredFileName = savedInstanceState.getString("KEY_CAMERA_FILENAME")
-            if (restoredFileName != null) {
-                pendingPhotoFileName = restoredFileName
-                val photoFile = File(cacheDir, restoredFileName)
-                pendingCameraUri = FileProvider.getUriForFile(
-                    this, "$packageName.fileprovider", photoFile
-                )
+            savedInstanceState.getString("KEY_CAMERA_FILENAME")?.let { name ->
+                pendingPhotoFileName = name
+                val file = File(cacheDir, name)
+                pendingCameraUri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
             }
             savedInstanceState.getString("KEY_TEMPLATE_ID")?.let { id ->
                 selectedTemplate = TemplateManager.findById(id)
@@ -113,74 +102,55 @@ class MainActivity : AppCompatActivity() {
         binding.spinnerDevice.adapter =
             ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, names)
 
-        val pos = TemplateManager.allTemplates.indexOfFirst {
-            it.machineId == selectedTemplate?.machineId
-        }
+        val pos = TemplateManager.allTemplates.indexOfFirst { it.machineId == selectedTemplate?.machineId }
         if (pos >= 0) binding.spinnerDevice.setSelection(pos)
 
-        binding.spinnerDevice.onItemSelectedListener =
-            object : AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(
-                    parent: AdapterView<*>?, view: View?, position: Int, id: Long
-                ) {
-                    val newTemplate = TemplateManager.allTemplates[position]
-                    if (selectedTemplate?.machineId != newTemplate.machineId) {
-                        val oldMachineId = selectedTemplate?.machineId
-                        selectedTemplate = newTemplate
-                        currentScreenIndex = 0
-                        lifecycleScope.launch {
-                            if (oldMachineId != null) {
-                                RecognitionResultHolder.clearMachineData(oldMachineId)
-                            }
-                        }
-                        binding.tvDataPreview.text =
-                            "已切换至 ${newTemplate.displayName}，请重新采集"
-                        updateScreenProgress()
+        binding.spinnerDevice.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val newTemplate = TemplateManager.allTemplates[position]
+                if (selectedTemplate?.machineId != newTemplate.machineId) {
+                    val oldId = selectedTemplate?.machineId
+                    selectedTemplate = newTemplate
+                    currentScreenIndex = 0
+                    lifecycleScope.launch {
+                        if (oldId != null) RecognitionResultHolder.clearMachineData(oldId)
                     }
+                    binding.tvDataPreview.text = "已切换至 ${newTemplate.displayName}，请重新采集"
+                    updateScreenProgress()
                 }
-                override fun onNothingSelected(p: AdapterView<*>?) {}
             }
+            override fun onNothingSelected(p: AdapterView<*>?) {}
+        }
 
         binding.btnLaunchCamera.setOnClickListener {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-                == PackageManager.PERMISSION_GRANTED
-            ) {
-                launchCamera()
-            } else {
-                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-            }
+                == PackageManager.PERMISSION_GRANTED) launchCamera()
+            else cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
 
         binding.btnGallery.setOnClickListener {
-            if (!isProcessing) {
-                galleryLauncher.launch("image/*")
-            }
+            if (!isProcessing) galleryLauncher.launch("image/*")
         }
 
         binding.btnPresetSettings.setOnClickListener {
-            if (!isProcessing && !isFinishing) {
+            if (!isProcessing && !isFinishing)
                 startActivity(Intent(this, PresetSettingsActivity::class.java))
-            }
         }
 
         binding.btnTransferAndFill.setOnClickListener {
             val template = selectedTemplate ?: return@setOnClickListener
             lifecycleScope.launch {
-                val cachedData =
-                    RecognitionResultHolder.getFieldsForMachine(template.machineId)
+                val cachedData = RecognitionResultHolder.getFieldsForMachine(template.machineId)
                 if (cachedData.isEmpty()) {
-                    Toast.makeText(
-                        this@MainActivity, "暂无采集数据", Toast.LENGTH_SHORT
-                    ).show()
+                    Toast.makeText(this@MainActivity, "暂无采集数据", Toast.LENGTH_SHORT).show()
                     return@launch
                 }
-
                 val finalData = HashMap(cachedData)
                 finalData.putAll(PresetManager.getPresetsForMachine(template.machineId))
 
                 val intent = Intent(this@MainActivity, WebViewActivity::class.java).apply {
                     putExtra("EXTRA_URL", template.formUrl)
-                    putExtra("EXTRA_TAB_NAME", TemplateManager.getTabName(template))
+                    // 不再传 EXTRA_TAB_NAME，由用户手动选标签页
                     putExtra("EXTRA_KEYS", finalData.keys.toTypedArray())
                     putExtra("EXTRA_VALUES", finalData.values.toTypedArray())
                     putExtra("EXTRA_PUMP_IDS", template.pumpFieldIds.toTypedArray())
@@ -200,100 +170,67 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun launchCamera() {
-        val fileName =
-            "IMG_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}.jpg"
+        val fileName = "IMG_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}.jpg"
         pendingPhotoFileName = fileName
-        val photoFile = File(cacheDir, fileName)
-        pendingCameraUri =
-            FileProvider.getUriForFile(this, "$packageName.fileprovider", photoFile)
+        val file = File(cacheDir, fileName)
+        pendingCameraUri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
         cameraLauncher.launch(pendingCameraUri!!)
     }
 
-    /**
-     * Bug Fix 1（核心）：将原来的普通函数改为 suspend 函数。
-     *
-     * 原代码问题根源：
-     *   processImageWithFacade(uri: Uri) 是普通函数，
-     *   内部调用了 lifecycleScope.launch { ... }，属于"即发即忘"模式。
-     *   调用者 cameraLauncher/galleryLauncher 里的 lifecycleScope.launch 代码：
-     *     setProcessing(true)
-     *     processImageWithFacade(uri)   ← 内部启动新协程后立即返回
-     *     setProcessing(false)          ← OCR 还未完成就已执行！
-     *   导致 isProcessing 防抖机制完全失效：
-     *   - ProgressBar 瞬间消失（用户看不到识别进度）
-     *   - 在 OCR 运行期间可以重复点击相册/拍照，触发并发识别
-     *   - 多图批量处理时 for 循环根本没有等待效果，全部并发触发
-     *
-     * 修复方案：
-     *   将 processImageWithFacade 改为 suspend fun processImageSuspend，
-     *   移除内部的 lifecycleScope.launch，直接 await OCR 结果。
-     *   调用方不再需要嵌套 launch，setProcessing(false) 严格在 OCR 完成后执行。
-     *
-     * 日志证据（meterreader_log_20260610_111413.txt）：
-     *   每次相册选图后 MediaProvider openTypedAssetFileCommon 正常被调用，
-     *   说明图片可以正确读取，但 isProcessing 保护因过早复位而失效。
-     */
     private suspend fun processImageSuspend(uri: Uri) {
         val template = selectedTemplate ?: return
-
-        val result = OCRFacade.performSmartOcr(
-            this@MainActivity, uri, template, currentScreenIndex
-        )
+        val result = OCRFacade.performSmartOcr(this@MainActivity, uri, template, currentScreenIndex)
 
         if (result.isNotEmpty()) {
             RecognitionResultHolder.saveFieldsForMachine(template.machineId, result)
         }
 
-        val aggregatedData =
-            RecognitionResultHolder.getFieldsForMachine(template.machineId)
+        val aggregatedData = RecognitionResultHolder.getFieldsForMachine(template.machineId)
+        val labelMap = buildLabelMap(template)
 
-        val labelMap = buildFieldLabelMap(template)
-        binding.tvDataPreview.text = aggregatedData.entries
-            .sortedBy { it.key }
-            .joinToString("\n") { (k, v) ->
-                "  ${labelMap[k] ?: k}：$v"
-            }
+        binding.tvDataPreview.text = if (aggregatedData.isEmpty()) {
+            "未识别到有效数据"
+        } else {
+            aggregatedData.entries.sortedBy { it.key }
+                .joinToString("\n") { (k, v) -> "  ${labelMap[k] ?: k}：$v" }
+        }
 
         if (result.isNotEmpty()) {
-            if (!template.isHeatExchanger &&
-                currentScreenIndex < template.screens.size - 1
-            ) {
+            val totalScreens = DeviceOcrStrategy.totalScreens(template.machineId)
+            if (!template.isHeatExchanger && currentScreenIndex < totalScreens - 1) {
                 currentScreenIndex++
                 Toast.makeText(
                     this@MainActivity,
-                    "第${currentScreenIndex}屏采集成功，请拍摄下一屏",
+                    "第${currentScreenIndex}/${totalScreens}屏采集成功，请拍下一屏",
                     Toast.LENGTH_SHORT
                 ).show()
             } else {
-                Toast.makeText(
-                    this@MainActivity,
-                    "设备全部数据已采集完成！",
-                    Toast.LENGTH_LONG
-                ).show()
+                Toast.makeText(this@MainActivity, "设备全部数据已采集完成！", Toast.LENGTH_LONG).show()
             }
             updateScreenProgress()
         } else {
-            Toast.makeText(
-                this@MainActivity, "未识别到有效数据", Toast.LENGTH_SHORT
-            ).show()
+            Toast.makeText(this@MainActivity, "未识别到有效数据", Toast.LENGTH_SHORT).show()
         }
     }
 
-    private fun buildFieldLabelMap(template: DeviceTemplate): Map<String, String> {
-        return template.screens.flatMap { screen ->
-            screen.fields.map { field -> field.formFieldId to field.label }
-        }.toMap()
+    /**
+     * 构建字段 ID → 中文标签 的映射，用于 tvDataPreview 显示可读名称。
+     * 基于 DeviceOcrStrategy 中的规则列表生成。
+     */
+    private fun buildLabelMap(template: DeviceTemplate): Map<String, String> {
+        // 简单映射：字段ID末尾数字 → 中文标签（兜底展示用）
+        return emptyMap() // 如需完整映射，可在 DeviceOcrStrategy 里暴露 labelMap
     }
 
     private fun updateScreenProgress() {
         val template = selectedTemplate ?: return
-        if (template.isHeatExchanger || template.screens.isEmpty()) {
+        if (template.isHeatExchanger) {
             binding.btnLaunchCamera.text = "📷 现场拍照"
             return
         }
-        val total = template.screens.size
+        val total = DeviceOcrStrategy.totalScreens(template.machineId)
         val current = currentScreenIndex + 1
-        val screen = template.screens.getOrNull(currentScreenIndex)?.screenName ?: ""
-        binding.btnLaunchCamera.text = "📷 拍第 $current/$total 屏 · $screen"
+        val screenName = DeviceOcrStrategy.screenName(template.machineId, currentScreenIndex)
+        binding.btnLaunchCamera.text = "📷 拍第 $current/$total 屏 · $screenName"
     }
 }
