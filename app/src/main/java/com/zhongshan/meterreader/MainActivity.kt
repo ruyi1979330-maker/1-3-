@@ -30,6 +30,7 @@ class MainActivity : AppCompatActivity() {
     private var currentScreenIndex = 0
     private var pendingCameraUri: Uri? = null
     private var pendingPhotoFileName: String? = null
+
     private var isProcessing = false
 
     private val cameraPermissionLauncher = registerForActivityResult(
@@ -84,7 +85,7 @@ class MainActivity : AppCompatActivity() {
                 selectedTemplate = TemplateManager.findById(id)
             }
         } else {
-            selectedTemplate = TemplateManager.allTemplates.firstOrNull()
+            selectedTemplate = TemplateManager.allTemplates.first()
         }
 
         lifecycleScope.launch(Dispatchers.IO) {
