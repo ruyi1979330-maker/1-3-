@@ -1,14 +1,7 @@
 package com.zhongshan.meterreader
 
-import com.zhongshan.meterreader.util.OCREngine
 import com.zhongshan.meterreader.util.OCREngine.OcrLine
 
-/**
- * 设备 OCR 提取策略 + 表单中文标签映射
- * 
- * 【终极修复】：彻底抛弃底层 OCREngine.extractValueByKeyword 的简单列表遍历，
- * 在策略层引入“严格 Y 坐标空间排序”算法，解决 MLKit 文本块乱序导致的识别错位问题。
- */
 object DeviceOcrStrategy {
 
     data class FieldRule(
@@ -19,9 +12,6 @@ object DeviceOcrStrategy {
         val formLabel: String = ""
     )
 
-    // =====================================================================
-    // 安全反射获取 OcrLine 的文本和 Y 坐标（兼容 MLKit 各种包装类，杜绝编译错误）
-    // =====================================================================
     private fun getLineText(line: Any): String {
         return try {
             line.javaClass.methods.firstOrNull { it.name == "getText" || it.name == "text" }?.invoke(line) as? String ?: ""
@@ -44,9 +34,6 @@ object DeviceOcrStrategy {
 
     private val numberRegex = Regex("(-?\\d+(\\.\\d+)?)")
 
-    // =====================================================================
-    // 特灵螺杆机规则 (保持不变)
-    // =====================================================================
     private fun traneScrewRules(prefix: Int): Map<Int, List<FieldRule>> {
         val off = when (prefix) { 2 -> 30; 3 -> 50; else -> 0 }
         val no = when (prefix) { 2 -> "2#"; 3 -> "3#"; else -> "1#" }
@@ -75,9 +62,6 @@ object DeviceOcrStrategy {
         )
     }
 
-    // =====================================================================
-    // 约克离心机规则 (保持不变)
-    // =====================================================================
     private fun yorkCentRules(): List<FieldRule> = listOf(
         FieldRule("field_1_69", listOf("冷冻水温度","冻水出水","冷冻出水"),   true, 5, "蒸发器 出水温度"),
         FieldRule("field_1_68", listOf("冷冻水返回","冻水返回","冷冻回水"),   true, 5, "蒸发器 进水温度"),
@@ -93,9 +77,6 @@ object DeviceOcrStrategy {
         FieldRule("field_1_75", listOf("油温","油槽温度"),                    false,0, "压缩机 油温")
     )
 
-    // =====================================================================
-    // 约克螺杆机规则 (保持不变)
-    // =====================================================================
     private fun yorkScrewRules(prefix: Int): List<FieldRule> {
         val off = if (prefix == 1) 0 else 30
         val no  = if (prefix == 1) "1#" else "2#"
@@ -116,9 +97,6 @@ object DeviceOcrStrategy {
         )
     }
 
-    // =====================================================================
-    // 【核心重构】：基于 Y 坐标空间排序的自主提取算法
-    // =====================================================================
     fun extract(lines: List<OcrLine>, machineId: String, screenIndex: Int): Map<String, String> {
         val rules: List<FieldRule> = when {
             machineId == "screw_1"   -> traneScrewRules(1)[screenIndex] ?: emptyList()
@@ -130,12 +108,10 @@ object DeviceOcrStrategy {
             else -> emptyList()
         }
 
-        // 1. 严格按 Y 坐标（从上到下）排序，解决 MLKit 文本块乱序问题
         val sortedLines = lines.sortedBy { getLineY(it) }
         val extractedValues = mutableMapOf<String, String>()
 
         for (rule in rules) {
-            // 2. 寻找包含关键词的锚点行
             val anchorIndex = sortedLines.indexOfFirst { line ->
                 val text = getLineText(line)
                 rule.keywords.any { kw -> text.contains(kw, ignoreCase = true) }
@@ -144,7 +120,6 @@ object DeviceOcrStrategy {
             if (anchorIndex != -1) {
                 val anchorText = getLineText(sortedLines[anchorIndex])
 
-                // 3. 同行提取 (searchBelow = false)
                 if (!rule.searchBelow) {
                     val match = numberRegex.find(anchorText)
                     if (match != null) {
@@ -153,13 +128,11 @@ object DeviceOcrStrategy {
                     }
                 }
 
-                // 4. 向下提取 (searchBelow = true)
                 var belowCount = 0
                 var lastY = getLineY(sortedLines[anchorIndex])
                 
                 for (i in anchorIndex + 1 until sortedLines.size) {
                     val currentY = getLineY(sortedLines[i])
-                    // 判定换行：Y坐标差距大于 25 像素（可根据实际分辨率微调）
                     if (currentY - lastY > 25) {
                         belowCount++
                         lastY = currentY
@@ -170,7 +143,6 @@ object DeviceOcrStrategy {
                     val match = numberRegex.find(text)
                     if (match != null) {
                         val value = match.value.toFloatOrNull()
-                        // 过滤异常值（温度/压力通常在 -100 到 500 之间）
                         if (value != null && value in -100f..500f) {
                             extractedValues[rule.fieldId] = match.value
                             break
@@ -180,7 +152,6 @@ object DeviceOcrStrategy {
             }
         }
 
-        // 5. 组装返回结果 (保持 "fieldId|中文标签" 格式)
         val finalResult = LinkedHashMap<String, String>()
         for (rule in rules) {
             val value = extractedValues[rule.fieldId] ?: continue
