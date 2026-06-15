@@ -1,4 +1,4 @@
-package com.zhongshan.meterreader.ui // 请确认您的 WebViewActivity 实际所在包名
+package com.zhongshan.meterreader
 
 import android.annotation.SuppressLint
 import android.os.Bundle
@@ -8,7 +8,6 @@ import android.webkit.WebViewClient
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import com.zhongshan.meterreader.R // 引入正确的 R 文件
 
 class WebViewActivity : AppCompatActivity() {
 
@@ -19,10 +18,12 @@ class WebViewActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_webview) // 请替换为您实际的布局 ID
+        // 请确保您的布局文件名正确，这里假设是 activity_web_view 或 activity_webview
+        setContentView(R.layout.activity_webview) 
         
-        tvBanner = findViewById(R.id.tv_banner) // 请替换为您实际的横幅控件 ID
-        webView = findViewById(R.id.webview) // 请替换为您实际的 WebView ID
+        // 请确保控件 ID 与 XML 中一致
+        tvBanner = findViewById(R.id.tv_status_banner) 
+        webView = findViewById(R.id.webview) 
 
         val url = intent.getStringExtra("URL") ?: ""
         formDataJson = intent.getStringExtra("FORM_DATA") ?: "[]"
@@ -37,7 +38,7 @@ class WebViewActivity : AppCompatActivity() {
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
-                tvBanner.text = "加载完成，请点击对应标签页自动填表"
+                tvBanner.text = "✅ 表单已加载！请手动点击上方对应标签页，APP 将自动填表。"
                 injectCoreJs(view)
             }
         }
