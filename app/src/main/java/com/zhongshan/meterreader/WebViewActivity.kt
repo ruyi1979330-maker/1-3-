@@ -33,9 +33,6 @@ class WebViewActivity : AppCompatActivity() {
     private fun String.esc() =
         replace("\\","\\\\").replace("'","\\'").replace("\n","\\n").replace("\r","")
 
-    // =====================================================================
-    // JS → Kotlin 回调桥
-    // =====================================================================
     class SafeWebBridge(activity: WebViewActivity) {
         private val ref = WeakReference(activity)
 
@@ -46,12 +43,11 @@ class WebViewActivity : AppCompatActivity() {
                 act.binding.tvStatusBanner.visibility = View.VISIBLE
                 act.binding.tvStatusBanner.text = "⏳ 检测到「$tabText」被点击，正在等待渲染后自动填表…"
                 
-                // 【修复】：阶梯式多次重试，应对 SPA 异步渲染延迟
                 val delays = listOf(800L, 1500L, 2500L)
                 for (delay in delays) {
                     Handler(Looper.getMainLooper()).postDelayed({
                         if (!act.isFinishing && !act.isDestroyed && !act.isFillDone.get()) {
-                            act.isFillDone.set(false) // 重置状态以允许重试
+                            act.isFillDone.set(false) 
                             act.binding.webView.evaluateJavascript(act.fillJsPayload, null)
                         }
                     }, delay)
@@ -157,9 +153,6 @@ class WebViewActivity : AppCompatActivity() {
         }
     }
 
-    // =====================================================================
-    // Tab 点击监听 JS + MutationObserver
-    // =====================================================================
     private fun compileTabMonitorJs(): String {
         val tabs = listOf("螺杆机组","离心机组","板交","螺杆机","交接班","操作记录")
         val tabsJs = tabs.joinToString(",") { "'${it.esc()}'" }
@@ -182,7 +175,6 @@ class WebViewActivity : AppCompatActivity() {
   }
   document.addEventListener('click', onDocClick, true);
   
-  // 监听 DOM 变化，应对标签页切换时的局部刷新
   var debounceTimer = null;
   var observer = new MutationObserver(function(mutations) {
     var hasChange = mutations.some(function(m) { return m.addedNodes.length > 2; });
@@ -198,9 +190,6 @@ class WebViewActivity : AppCompatActivity() {
         """.trimIndent()
     }
 
-    // =====================================================================
-    // 填表 JS — 终极修复版
-    // =====================================================================
     private fun compileFillJs(keys: Array<String>, values: Array<String>, pumpIds: Array<String>): String {
         val sb = StringBuilder()
         sb.append("(function(){")
@@ -219,7 +208,6 @@ function findInput(item){
   if(el) return el;
   if(!item.label) return null;
   
-  // 【修复】：去除空格和换行，解决 "1#蒸发器进口 水温" 匹配失败问题
   var cleanLabel = item.label.replace(/\s+/g, '');
   var nodes = document.querySelectorAll('label,span,div,p,td,th,.title,.label');
   for(var i=0;i<nodes.length;i++){
@@ -237,7 +225,6 @@ function findInput(item){
 }
 
 function setVal(el, v){
-  // 【修复】：精准获取对应标签的 native setter，破解 React/Vue 填值免疫
   var proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
   var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
   if(setter){ setter.call(el,v); } else { el.value=v; }
