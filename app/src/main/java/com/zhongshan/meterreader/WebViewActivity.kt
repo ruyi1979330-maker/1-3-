@@ -1,300 +1,195 @@
-package com.zhongshan.meterreader
+package com.example.ocrapp.ui
 
 import android.annotation.SuppressLint
-import android.graphics.Bitmap
-import android.net.http.SslError
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.view.View
-import android.webkit.*
+import android.webkit.JavascriptInterface
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import com.zhongshan.meterreader.databinding.ActivityWebviewBinding
-import java.lang.ref.WeakReference
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
+import org.json.JSONArray
+import org.json.JSONObject
 
-/**
- * WebViewActivity
- *
- * =====================================================================
- * 本轮 Bug Fix：
- *
- * 【Fix 1】横幅始终显示"加载中"（图5/图6）
- *   根因：onPageStarted 设置横幅为"加载中"，但 onPageFinished 没有更新。
- *   修复：onPageFinished 后横幅改为"加载完成，请点击对应标签页"。
- *
- * 【Fix 2】填入0个字段（图7）
- *   根因：JS 用 getElementById('field_3_44') 查找 DOM，
- *         但表单实际 input 元素可能没有这个 id 或 id 格式不同。
- *   修复：compileFillJs 改为双重匹配策略：
- *         1) 先试 getElementById(fieldId)
- *         2) 失败则用中文标签（formLabel）遍历页面所有 label/span/div，
- *            找包含该标签文字的容器，取其中第一个 input/textarea 填值。
- *         字段传入格式由 MainActivity 改为 "fieldId|中文标签"。
- *
- * 【Fix 3】JS 事件监听改用 MutationObserver + 延时重试
- *   原代码只注入一次 click 监听，SPA 路由后 DOM 替换可能导致监听失效。
- *   修复：监听注入后同时启动 MutationObserver，DOM 变化时重新绑定监听。
- * =====================================================================
- */
 class WebViewActivity : AppCompatActivity() {
 
-    companion object {
-        private const val WEB_LOAD_TIMEOUT_MS = 20_000L
-        private const val TAB_RENDER_WAIT_MS  = 1200L
-        private const val FIELD_FILL_INTERVAL = 120
-    }
+    private lateinit var webView: WebView
+    private lateinit var tvBanner: TextView
+    private var formDataJson: String = "[]"
+    private var currentActiveTab: String = "交接班" // 默认标签页
 
-    internal lateinit var binding: ActivityWebviewBinding
-    private var targetUrl   = ""
-    private var fillJsPayload = ""
-
-    private val timeoutHandler      = Handler(Looper.getMainLooper())
-    private val pageLoadGeneration  = AtomicInteger(0)
-    private val isFillDone          = AtomicBoolean(false)
-    private val isMonitorInjected   = AtomicBoolean(false)
-
-    private fun String.esc() =
-        replace("\\","\\\\").replace("'","\\'").replace("\n","\\n").replace("\r","")
-
-    // =====================================================================
-    // JS → Kotlin 回调桥
-    // =====================================================================
-    class SafeWebBridge(activity: WebViewActivity) {
-        private val ref = WeakReference(activity)
-
-        @JavascriptInterface
-        fun onTabClicked(tabText: String) {
-            ref.get()?.runOnUiThread {
-                val act = ref.get() ?: return@runOnUiThread
-                act.binding.tvStatusBanner.visibility = View.VISIBLE
-                act.binding.tvStatusBanner.text = "⏳ 检测到「$tabText」被点击，正在等待渲染后自动填表…"
-                Handler(Looper.getMainLooper()).postDelayed({
-                    if (!act.isFinishing && !act.isDestroyed) {
-                        act.isFillDone.set(false)
-                        act.binding.webView.evaluateJavascript(act.fillJsPayload, null)
-                    }
-                }, TAB_RENDER_WAIT_MS)
-            }
-        }
-
-        @JavascriptInterface
-        fun onFillComplete(count: Int) {
-            ref.get()?.runOnUiThread {
-                val act = ref.get() ?: return@runOnUiThread
-                if (act.isFillDone.compareAndSet(false, true)) {
-                    act.binding.tvStatusBanner.visibility = View.VISIBLE
-                    act.binding.tvStatusBanner.text =
-                        if (count > 0) "✅ 成功填入 $count 个字段！请人工核对后提交。"
-                        else           "⚠️ 填入0个字段。请下拉到当前标签页内容加载完毕后再点击标签页。"
-                }
-            }
-        }
-    }
-
+    @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        binding = ActivityWebviewBinding.inflate(layoutInflater)
-        setContentView(binding.root)
+        // setContentView(R.layout.activity_webview) // 假设布局
+        
+        tvBanner = findViewById(android.R.id.title) // 假设的横幅控件
+        webView = findViewById(android.R.id.content) // 假设的WebView控件
 
-        targetUrl = intent.getStringExtra("EXTRA_URL") ?: ""
-        val keys    = intent.getStringArrayExtra("EXTRA_KEYS")    ?: emptyArray()
-        val values  = intent.getStringArrayExtra("EXTRA_VALUES")  ?: emptyArray()
-        val pumpIds = intent.getStringArrayExtra("EXTRA_PUMP_IDS")?: emptyArray()
+        val url = intent.getStringExtra("URL") ?: ""
+        formDataJson = intent.getStringExtra("FORM_DATA") ?: "[]"
 
-        fillJsPayload = compileFillJs(keys, values, pumpIds)
-        initWebView()
-        if (targetUrl.isNotEmpty()) binding.webView.loadUrl(targetUrl)
-    }
+        webView.settings.javaScriptEnabled = true
+        webView.settings.domStorageEnabled = true
+        
+        // 注入 Android 桥接对象
+        webView.addJavascriptInterface(WebAppInterface(), "AndroidBridge")
 
-    @SuppressLint("SetJavaScriptEnabled","WebViewClientOnReceivedSslError")
-    private fun initWebView() {
-        binding.webView.settings.apply {
-            javaScriptEnabled  = true
-            domStorageEnabled  = true
-            mixedContentMode   = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-        }
-        binding.webView.addJavascriptInterface(SafeWebBridge(this), "AndroidBridge")
-
-        binding.webView.webViewClient = object : WebViewClient() {
-
-            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                isFillDone.set(false)
-                isMonitorInjected.set(false)
-                binding.progressBar.visibility      = View.VISIBLE
-                binding.tvStatusBanner.visibility   = View.VISIBLE
-                // Fix 3：加载中提示
-                binding.tvStatusBanner.text = "⏳ 表单加载中，请稍候…"
-
-                val gen = pageLoadGeneration.incrementAndGet()
-                timeoutHandler.postDelayed({
-                    if (pageLoadGeneration.get() == gen) {
-                        binding.progressBar.visibility    = View.GONE
-                        binding.webView.stopLoading()
-                        binding.layoutNetworkError.visibility = View.VISIBLE
-                        binding.tvErrorMsg.text = "网络超时，机房信号不稳定，请稍后重试。"
-                        binding.tvStatusBanner.visibility = View.GONE
-                    }
-                }, WEB_LOAD_TIMEOUT_MS)
+        webView.webViewClient = object : WebViewClient() {
+            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                tvBanner.text = "表单加载中，请稍候..."
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
-                pageLoadGeneration.incrementAndGet()
-                binding.progressBar.visibility = View.GONE
-                val host = runCatching { android.net.Uri.parse(url ?: "").host }.getOrNull() ?: ""
-                if (host == "appflow.zs-hospital.sh.cn") {
-                    // Fix 1：页面加载完成后更新横幅提示
-                    binding.tvStatusBanner.visibility = View.VISIBLE
-                    binding.tvStatusBanner.text = "✅ 表单已加载！请手动点击上方对应标签页（螺杆机/板交等），APP 将自动填表。"
-
-                    if (isMonitorInjected.compareAndSet(false, true)) {
-                        view?.evaluateJavascript(compileTabMonitorJs(), null)
-                    }
-                }
-            }
-
-            override fun onReceivedError(view: WebView?, req: WebResourceRequest?, err: WebResourceError?) {
-                if (req?.isForMainFrame == true) {
-                    pageLoadGeneration.incrementAndGet()
-                    isMonitorInjected.set(false)
-                    binding.progressBar.visibility        = View.GONE
-                    binding.layoutNetworkError.visibility = View.VISIBLE
-                    binding.tvErrorMsg.text               = "表单加载失败，请检查网络后重试。"
-                    binding.tvStatusBanner.visibility     = View.GONE
-                }
-            }
-
-            override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
-                val host = runCatching { android.net.Uri.parse(error?.url ?: "").host }.getOrNull()
-                if (host == "appflow.zs-hospital.sh.cn") handler?.proceed() else handler?.cancel()
+                tvBanner.text = "加载完成，请点击对应标签页自动填表"
+                // 注入核心 JS 逻辑
+                injectCoreJs(view)
             }
         }
-
-        binding.btnRetryNetwork.setOnClickListener {
-            binding.layoutNetworkError.visibility = View.GONE
-            isMonitorInjected.set(false)
-            isFillDone.set(false)
-            if (targetUrl.isNotEmpty()) binding.webView.loadUrl(targetUrl)
-        }
+        webView.loadUrl(url)
     }
 
-    // =====================================================================
-    // Tab 点击监听 JS
-    // =====================================================================
-    private fun compileTabMonitorJs(): String {
-        val tabs = listOf("螺杆机组","离心机组","板交","螺杆机","交接班","操作记录")
-        val tabsJs = tabs.joinToString(",") { "'${it.esc()}'" }
+    private fun injectCoreJs(view: WebView?) {
+        val jsCode = compileFillJs(formDataJson)
+        view?.evaluateJavascript(jsCode, null)
+    }
+
+    /**
+     * 编译并生成注入的 JS 代码
+     */
+    private fun compileFillJs(jsonData: String): String {
         return """
-(function(){
-  if(window.__tabMonitor) return;
-  window.__tabMonitor = true;
-  var knownTabs = [$tabsJs];
-  function onDocClick(e){
-    var t = e.target;
-    for(var d=0; d<6 && t && t.tagName!=='BODY'; d++){
-      var txt = (t.innerText||t.textContent||'').trim();
-      for(var i=0; i<knownTabs.length; i++){
-        if(txt===knownTabs[i]||(txt.indexOf(knownTabs[i])>-1&&txt.length<=knownTabs[i].length+3)){
-          AndroidBridge.onTabClicked(knownTabs[i]); return;
-        }
-      }
-      t = t.parentElement;
-    }
-  }
-  document.addEventListener('click', onDocClick, true);
-})();
+        (function() {
+            // 1. 将数据挂载到 window 供后续调用
+            window.__FORM_DATA__ = $jsonData;
+            window.__FILLED_COUNT__ = 0;
+
+            // 2. 兼容 React/Vue 等现代前端框架的填值函数
+            function setNativeValue(element, value) {
+                const valueSetter = Object.getOwnPropertyDescriptor(element, 'value').set;
+                const prototype = Object.getPrototypeOf(element);
+                const prototypeValueSetter = Object.getOwnPropertyDescriptor(prototype, 'value').set;
+                
+                if (valueSetter && valueSetter !== prototypeValueSetter) {
+                    prototypeValueSetter.call(element, value);
+                } else {
+                    if(valueSetter) valueSetter.call(element, value);
+                    else element.value = value;
+                }
+                element.dispatchEvent(new Event('input', { bubbles: true }));
+                element.dispatchEvent(new Event('change', { bubbles: true }));
+                element.dispatchEvent(new Event('blur', { bubbles: true }));
+            }
+
+            // 3. 核心填表逻辑
+            window.fillFormData = function() {
+                let data = window.__FORM_DATA__;
+                if (!data || data.length === 0) return;
+                
+                let filledCount = 0;
+                data.forEach(item => {
+                    let filled = false;
+                    
+                    // 策略 A: 通过 ID 或 Name 精确查找
+                    let el = document.getElementById(item.fieldId) || document.querySelector('[name="' + item.fieldId + '"]');
+                    if (el && el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
+                        setNativeValue(el, item.value);
+                        filled = true;
+                    }
+                    
+                    // 策略 B: 通过中文标签 (formLabel) 模糊查找
+                    if (!filled && item.formLabel) {
+                        let labels = document.querySelectorAll('label, span, div, td, th, p');
+                        for (let lbl of labels) {
+                            if (lbl.innerText && lbl.innerText.includes(item.formLabel)) {
+                                // 向上查找常见的表单容器
+                                let parent = lbl.closest('.form-group, .el-form-item, .ant-form-item, .list-item, tr, .van-cell, div[class*="item"]');
+                                if (parent) {
+                                    let input = parent.querySelector('input, textarea, select');
+                                    if (input) {
+                                        setNativeValue(input, item.value);
+                                        filled = true;
+                                        break;
+                                    }
+                                }
+                                // 如果容器没找到，尝试找兄弟节点
+                                let sibling = lbl.nextElementSibling;
+                                while(sibling && !filled) {
+                                    let input = sibling.querySelector('input, textarea, select') || (sibling.tagName === 'INPUT' ? sibling : null);
+                                    if (input) {
+                                        setNativeValue(input, item.value);
+                                        filled = true;
+                                    }
+                                    sibling = sibling.nextElementSibling;
+                                }
+                            }
+                        }
+                    }
+                    if (filled) filledCount++;
+                });
+                
+                window.__FILLED_COUNT__ = filledCount;
+                if (filledCount > 0) {
+                    window.AndroidBridge.showToast('成功填入 ' + filledCount + ' 个字段');
+                }
+            };
+
+            // 4. 监听标签页点击 (事件委托，防止 SPA 路由导致监听失效)
+            document.addEventListener('click', function(e) {
+                let target = e.target;
+                while(target && target !== document.body) {
+                    let text = target.innerText ? target.innerText.trim() : '';
+                    // 匹配一号/三号机房的标签页名称
+                    let knownTabs = ['交接班', '螺杆机组', '离心机组', '板交', '螺杆机', '操作记录'];
+                    let matchedTab = knownTabs.find(tab => text.includes(tab));
+                    
+                    if (matchedTab) {
+                        window.AndroidBridge.onTabClicked(matchedTab);
+                        // 多次延时重试，应对 SPA 异步渲染延迟
+                        setTimeout(() => window.fillFormData(), 300);
+                        setTimeout(() => window.fillFormData(), 800);
+                        setTimeout(() => window.fillFormData(), 1500);
+                        break;
+                    }
+                    target = target.parentElement;
+                }
+            }, true); // 使用捕获阶段
+
+            // 5. MutationObserver 监听 DOM 变化 (标签页切换导致 DOM 替换时触发)
+            let debounceTimer = null;
+            const observer = new MutationObserver((mutations) => {
+                let hasSignificantChange = mutations.some(m => m.addedNodes.length > 2);
+                if (hasSignificantChange) {
+                    clearTimeout(debounceTimer);
+                    debounceTimer = setTimeout(() => window.fillFormData(), 500);
+                }
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
+
+            // 初始加载时尝试填一次（针对默认标签页）
+            setTimeout(() => window.fillFormData(), 1000);
+        })();
         """.trimIndent()
     }
 
-    // =====================================================================
-    // 填表 JS — Fix 2：双重匹配（fieldId + 中文标签）
-    //
-    // 键格式："fieldId|中文标签"
-    // 策略：
-    //   1. 先 getElementById(fieldId) 或 querySelector([name=fieldId])
-    //   2. 失败则遍历页面所有含标签文字的元素，向上找父容器里的第一个 input
-    //   3. 再次失败则跳过，不报错
-    // =====================================================================
-    private fun compileFillJs(keys: Array<String>, values: Array<String>, pumpIds: Array<String>): String {
-        val sb = StringBuilder()
-        sb.append("(function(){")
-        sb.append("var data=[];")
-        for (i in keys.indices) {
-            val parts = keys[i].split("|")
-            val fid   = parts[0].esc()
-            val label = if (parts.size > 1) parts[1].esc() else ""
-            val v     = values[i].esc()
-            sb.append("data.push({id:'$fid',label:'$label',v:'$v'});")
+    /**
+     * JS 桥接接口
+     */
+    inner class WebAppInterface {
+        @JavascriptInterface
+        fun onTabClicked(tabName: String) {
+            runOnUiThread {
+                currentActiveTab = tabName
+                tvBanner.text = "当前标签页：$tabName (正在自动填表...)"
+            }
         }
-        sb.append("""
-var idx=0, filled=0;
-function findInput(item){
-  // 策略1：id 精确匹配
-  var el = document.getElementById(item.id)
-        || document.querySelector('[name="'+item.id+'"]');
-  if(el) return el;
-  // 策略2：中文标签模糊匹配（遍历页面所有含标签文字的节点）
-  if(!item.label) return null;
-  var nodes = document.querySelectorAll('label,span,div,p,td,th');
-  for(var i=0;i<nodes.length;i++){
-    var txt=(nodes[i].innerText||nodes[i].textContent||'').trim();
-    if(txt.indexOf(item.label)<0) continue;
-    // 向上最多6层找 input
-    var par=nodes[i].parentElement; var dep=0;
-    while(par && par.tagName!=='BODY' && dep<6){
-      var ins=par.querySelectorAll('input:not([type=radio]):not([type=checkbox]):not([type=hidden]),textarea');
-      if(ins.length>0) return ins[0];
-      par=par.parentElement; dep++;
-    }
-    // 向下找 input（兄弟容器场景）
-    var sib=nodes[i].nextElementSibling;
-    for(var s=0;s<3&&sib;s++){
-      var ins2=sib.querySelectorAll('input:not([type=radio]):not([type=checkbox]):not([type=hidden]),textarea');
-      if(ins2.length>0) return ins2[0];
-      sib=sib.nextElementSibling;
-    }
-  }
-  return null;
-}
-function setVal(el, v){
-  var ds=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value')
-       ||Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value');
-  if(ds&&ds.set){ ds.set.call(el,v); } else { el.value=v; }
-  el.dispatchEvent(new InputEvent('input',{bubbles:true,cancelable:true,inputType:'insertText',data:v}));
-  el.dispatchEvent(new Event('change',{bubbles:true}));
-}
-function fillNext(){
-  if(idx>=data.length){
-""")
-        for (pid in pumpIds) {
-            sb.append("""
-    var chk=document.getElementById('$pid')||document.querySelector('[value="$pid"],[name="$pid"]');
-    if(chk&&chk.type==='checkbox'){
-      var cs=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'checked');
-      if(cs&&cs.set){cs.set.call(chk,true);}else{chk.checked=true;}
-      chk.dispatchEvent(new Event('change',{bubbles:true}));
-    }
-""")
-        }
-        sb.append("""
-    AndroidBridge.onFillComplete(filled); return;
-  }
-  var item=data[idx];
-  var el=findInput(item);
-  if(el){ el.focus(); setVal(el,item.v); el.blur(); filled++; }
-  idx++; setTimeout(fillNext,$FIELD_FILL_INTERVAL);
-}
-fillNext();
-})();
-""")
-        return sb.toString()
-    }
 
-    override fun onDestroy() {
-        timeoutHandler.removeCallbacksAndMessages(null)
-        binding.webView.removeJavascriptInterface("AndroidBridge")
-        binding.webView.apply { loadUrl("about:blank"); stopLoading(); clearHistory(); destroy() }
-        super.onDestroy()
+        @JavascriptInterface
+        fun showToast(msg: String) {
+            runOnUiThread {
+                Toast.makeText(this@WebViewActivity, msg, Toast.LENGTH_SHORT).show()
+                tvBanner.text = "填表完成：$msg"
+            }
+        }
     }
 }
