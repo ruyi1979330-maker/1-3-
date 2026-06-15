@@ -32,7 +32,8 @@ object DeviceOcrStrategy {
         } catch (e: Exception) { 0 }
     }
 
-    private val numberRegex = Regex("(-?\\d+(\\.\\d+)?)")
+    // 放宽匹配，只要包含数字即可
+    private val numberRegex = Regex("\\d+(\\.\\d+)?")
 
     private fun traneScrewRules(prefix: Int): Map<Int, List<FieldRule>> {
         val off = when (prefix) { 2 -> 30; 3 -> 50; else -> 0 }
@@ -108,6 +109,7 @@ object DeviceOcrStrategy {
             else -> emptyList()
         }
 
+        // 增大 Y 坐标阈值到 40，防止高分辨率屏幕下换行判断失误
         val sortedLines = lines.sortedBy { getLineY(it) }
         val extractedValues = mutableMapOf<String, String>()
 
@@ -121,9 +123,9 @@ object DeviceOcrStrategy {
                 val anchorText = getLineText(sortedLines[anchorIndex])
 
                 if (!rule.searchBelow) {
-                    val match = numberRegex.find(anchorText)
-                    if (match != null) {
-                        extractedValues[rule.fieldId] = match.value
+                    val cleanVal = cleanNumber(anchorText)
+                    if (cleanVal != null) {
+                        extractedValues[rule.fieldId] = cleanVal
                         continue
                     }
                 }
@@ -133,20 +135,17 @@ object DeviceOcrStrategy {
                 
                 for (i in anchorIndex + 1 until sortedLines.size) {
                     val currentY = getLineY(sortedLines[i])
-                    if (currentY - lastY > 25) {
+                    if (currentY - lastY > 40) {
                         belowCount++
                         lastY = currentY
                     }
                     if (belowCount > rule.maxBelow) break
 
                     val text = getLineText(sortedLines[i])
-                    val match = numberRegex.find(text)
-                    if (match != null) {
-                        val value = match.value.toFloatOrNull()
-                        if (value != null && value in -100f..500f) {
-                            extractedValues[rule.fieldId] = match.value
-                            break
-                        }
+                    val cleanVal = cleanNumber(text)
+                    if (cleanVal != null) {
+                        extractedValues[rule.fieldId] = cleanVal
+                        break
                     }
                 }
             }
@@ -159,6 +158,26 @@ object DeviceOcrStrategy {
             finalResult[key] = value
         }
         return finalResult
+    }
+
+    // 【核心新增】：暴力清洗数字，只保留数字和小数点
+    private fun cleanNumber(text: String): String? {
+        val match = numberRegex.find(text) ?: return null
+        // 强制剔除非数字和非小数点字符
+        var clean = match.value.replace(Regex("[^0-9.]"), "")
+        // 处理多个小数点（如 7.8.5 -> 7.85）
+        val parts = clean.split(".")
+        if (parts.size > 2) {
+            clean = parts[0] + "." + parts.subList(1, parts.size).joinToString("")
+        }
+        if (clean.isEmpty() || clean == ".") return null
+        
+        val fVal = clean.toFloatOrNull()
+        // 过滤掉明显不合理的异常值
+        if (fVal != null && fVal in -100f..9999f) {
+            return clean
+        }
+        return null
     }
 
     fun totalScreens(machineId: String): Int = when {
