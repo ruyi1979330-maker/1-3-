@@ -22,6 +22,7 @@ object OCRFacade {
 
         try {
             val lines = OCREngine.recognizeAllLines(bitmap)
+
             if (lines.isEmpty()) return@withContext emptyMap()
 
             if (template.isHeatExchanger) {
