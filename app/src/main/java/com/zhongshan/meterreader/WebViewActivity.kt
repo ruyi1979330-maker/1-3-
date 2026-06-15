@@ -6,6 +6,7 @@ import android.net.http.SslError
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.View
 import android.webkit.*
 import androidx.appcompat.app.AppCompatActivity
@@ -18,7 +19,8 @@ class WebViewActivity : AppCompatActivity() {
 
     companion object {
         private const val WEB_LOAD_TIMEOUT_MS = 20_000L
-        private const val FIELD_FILL_INTERVAL = 120
+        // 【修复】：将填值间隔从 120ms 拉长到 400ms，给前端框架足够的响应时间，防止被覆盖
+        private const val FIELD_FILL_INTERVAL = 400 
     }
 
     internal lateinit var binding: ActivityWebviewBinding
@@ -43,7 +45,7 @@ class WebViewActivity : AppCompatActivity() {
                 act.binding.tvStatusBanner.visibility = View.VISIBLE
                 act.binding.tvStatusBanner.text = "⏳ 检测到「$tabText」被点击，正在等待渲染后自动填表…"
                 
-                val delays = listOf(800L, 1500L, 2500L)
+                val delays = listOf(1000L, 2000L, 3500L)
                 for (delay in delays) {
                     Handler(Looper.getMainLooper()).postDelayed({
                         if (!act.isFinishing && !act.isDestroyed && !act.isFillDone.get()) {
@@ -66,6 +68,12 @@ class WebViewActivity : AppCompatActivity() {
                         else           "⚠️ 填入0个字段。请确保当前标签页内容已完全加载。"
                 }
             }
+        }
+        
+        // 【新增】：接收 JS 端的调试日志，方便在 Logcat 中查看 JS 到底在干嘛
+        @JavascriptInterface
+        fun log(msg: String) {
+            Log.d("WebViewJS", msg)
         }
     }
 
@@ -118,7 +126,7 @@ class WebViewActivity : AppCompatActivity() {
                 pageLoadGeneration.incrementAndGet()
                 binding.progressBar.visibility = View.GONE
                 val host = runCatching { android.net.Uri.parse(url ?: "").host }.getOrNull() ?: ""
-                if (host == "appflow.zs-hospital.sh.cn") {
+                if (host == "appflow.zs-hospital.sh.cn" || url?.contains("zs-hospital") == true) {
                     binding.tvStatusBanner.visibility = View.VISIBLE
                     binding.tvStatusBanner.text = "✅ 表单已加载！请手动点击上方对应标签页，APP 将自动填表。"
 
@@ -140,8 +148,7 @@ class WebViewActivity : AppCompatActivity() {
             }
 
             override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
-                val host = runCatching { android.net.Uri.parse(error?.url ?: "").host }.getOrNull()
-                if (host == "appflow.zs-hospital.sh.cn") handler?.proceed() else handler?.cancel()
+                handler?.proceed() // 医院内网证书可能有问题，直接放行
             }
         }
 
@@ -182,7 +189,7 @@ class WebViewActivity : AppCompatActivity() {
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(function() {
         if (window.__fillForm) window.__fillForm();
-      }, 800);
+      }, 1000);
     }
   });
   observer.observe(document.body, { childList: true, subtree: true });
@@ -203,36 +210,58 @@ class WebViewActivity : AppCompatActivity() {
         }
         sb.append("""
 var idx=0, filled=0;
+
 function findInput(item){
   var el = document.getElementById(item.id) || document.querySelector('[name="'+item.id+'"]');
   if(el) return el;
   if(!item.label) return null;
   
   var cleanLabel = item.label.replace(/\s+/g, '');
-  var nodes = document.querySelectorAll('label,span,div,p,td,th,.title,.label');
-  for(var i=0;i<nodes.length;i++){
-    var txt=(nodes[i].innerText||nodes[i].textContent||'').replace(/\s+/g, '');
-    if(txt.indexOf(cleanLabel)<0) continue;
+  var allElements = document.querySelectorAll('*');
+  for(var i=0; i<allElements.length; i++){
+    var node = allElements[i];
+    if(node.children.length > 0 && node.tagName !== 'LABEL' && node.tagName !== 'TD' && node.tagName !== 'TH') continue;
     
-    var par=nodes[i].parentElement; var dep=0;
-    while(par && par.tagName!=='BODY' && dep<8){
-      var ins=par.querySelector('input:not([type=radio]):not([type=checkbox]):not([type=hidden]),textarea');
-      if(ins) return ins;
-      par=par.parentElement; dep++;
+    var txt = (node.innerText || node.textContent || '').replace(/\s+/g, '');
+    if(txt.indexOf(cleanLabel) >= 0){
+      var parent = node;
+      for(var j=0; j<10; j++){
+        parent = parent.parentElement;
+        if(!parent || parent.tagName === 'BODY') break;
+        
+        var cls = parent.className || '';
+        if(cls.indexOf('form-item') > -1 || cls.indexOf('form-group') > -1 || 
+           cls.indexOf('list-item') > -1 || cls.indexOf('cell') > -1 || parent.tagName === 'TR'){
+          var input = parent.querySelector('input:not([type=hidden]):not([type=radio]):not([type=checkbox]), textarea');
+          if(input) return input;
+        }
+      }
     }
   }
   return null;
 }
 
 function setVal(el, v){
+  el.focus();
+  el.value = '';
+  el.dispatchEvent(new Event('input', {bubbles: true}));
+  
   var proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
   var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
-  if(setter){ setter.call(el,v); } else { el.value=v; }
   
-  el.dispatchEvent(new Event('focus', {bubbles:true}));
-  el.dispatchEvent(new InputEvent('input', {bubbles:true, cancelable:true, inputType:'insertText', data:v}));
-  el.dispatchEvent(new Event('change', {bubbles:true}));
-  el.dispatchEvent(new Event('blur', {bubbles:true}));
+  // 延迟 50ms 填入，避开前端防抖冲突
+  setTimeout(function() {
+    if(setter){ setter.call(el, v); } else { el.value = v; }
+    
+    // 完整模拟人类键盘输入事件链，防止被前端状态机覆盖
+    el.dispatchEvent(new Event('focus', {bubbles:true}));
+    el.dispatchEvent(new KeyboardEvent('keydown', {bubbles:true}));
+    el.dispatchEvent(new KeyboardEvent('keypress', {bubbles:true}));
+    el.dispatchEvent(new InputEvent('input', {bubbles:true, cancelable:true, inputType:'insertText', data:v}));
+    el.dispatchEvent(new KeyboardEvent('keyup', {bubbles:true}));
+    el.dispatchEvent(new Event('change', {bubbles:true}));
+    el.dispatchEvent(new Event('blur', {bubbles:true}));
+  }, 50);
 }
 
 window.__fillForm = function(){
@@ -258,8 +287,16 @@ function fillNext(){
   }
   var item=data[idx];
   var el=findInput(item);
-  if(el){ el.focus(); setVal(el,item.v); el.blur(); filled++; }
-  idx++; setTimeout(fillNext,$FIELD_FILL_INTERVAL);
+  if(el){ 
+    setVal(el, item.v); 
+    filled++; 
+  } else {
+    if(window.AndroidBridge && window.AndroidBridge.log) {
+        AndroidBridge.log('未找到输入框: ' + item.label);
+    }
+  }
+  idx++; 
+  setTimeout(fillNext, $FIELD_FILL_INTERVAL);
 }
 window.__fillForm();
 })();
