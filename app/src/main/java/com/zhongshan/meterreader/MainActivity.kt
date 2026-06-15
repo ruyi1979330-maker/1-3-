@@ -173,12 +173,20 @@ class MainActivity : AppCompatActivity() {
                 val finalData = HashMap(cachedData)
                 finalData.putAll(PresetManager.getPresetsForMachine(template.machineId))
 
+                // 【安全处理】：防止 pumpFieldIds 属性不存在导致编译失败
+                val pumpIds = try {
+                    val method = template.javaClass.getMethod("getPumpFieldIds")
+                    (method.invoke(template) as? List<*>)?.map { it.toString() }?.toTypedArray() ?: emptyArray()
+                } catch (e: Exception) {
+                    emptyArray<String>()
+                }
+
                 val intent = Intent(this@MainActivity, WebViewActivity::class.java).apply {
                     putExtra("EXTRA_URL", template.formUrl)
                     putExtra("EXTRA_TAB_NAME", TemplateManager.getTabName(template))
                     putExtra("EXTRA_KEYS", finalData.keys.toTypedArray())
                     putExtra("EXTRA_VALUES", finalData.values.toTypedArray())
-                    putExtra("EXTRA_PUMP_IDS", template.pumpFieldIds.toTypedArray())
+                    putExtra("EXTRA_PUMP_IDS", pumpIds)
                 }
                 startActivity(intent)
             }
@@ -218,17 +226,19 @@ class MainActivity : AppCompatActivity() {
         val aggregatedData =
             RecognitionResultHolder.getFieldsForMachine(template.machineId)
 
-        val labelMap = buildFieldLabelMap(template)
+        // 【修复点 1】：直接从 key 中解析中文标签，彻底抛弃不存在的 template.screens
         binding.tvDataPreview.text = aggregatedData.entries
             .sortedBy { it.key }
             .joinToString("\n") { (k, v) ->
-                "  ${labelMap[k] ?: k}：$v"
+                val label = if (k.contains("|")) k.split("|")[1] else k
+                "  $label：$v"
             }
 
+        // 【修复点 2】：使用 DeviceOcrStrategy 获取总屏数
+        val totalScreens = DeviceOcrStrategy.totalScreens(template.machineId)
+
         if (result.isNotEmpty()) {
-            if (!template.isHeatExchanger &&
-                currentScreenIndex < template.screens.size - 1
-            ) {
+            if (!template.isHeatExchanger && currentScreenIndex < totalScreens - 1) {
                 currentScreenIndex++
                 Toast.makeText(
                     this@MainActivity,
@@ -250,21 +260,20 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun buildFieldLabelMap(template: DeviceTemplate): Map<String, String> {
-        return template.screens.flatMap { screen ->
-            screen.fields.map { field -> field.formFieldId to field.label }
-        }.toMap()
-    }
+    // 【修复点 3】：删除了原来依赖 template.screens 的 buildFieldLabelMap 方法
 
     private fun updateScreenProgress() {
         val template = selectedTemplate ?: return
-        if (template.isHeatExchanger || template.screens.isEmpty()) {
+        
+        // 【修复点 4】：使用 DeviceOcrStrategy 获取总屏数和当前屏名称
+        val total = DeviceOcrStrategy.totalScreens(template.machineId)
+        
+        if (template.isHeatExchanger || total <= 1) {
             binding.btnLaunchCamera.text = "📷 现场拍照"
             return
         }
-        val total = template.screens.size
         val current = currentScreenIndex + 1
-        val screen = template.screens.getOrNull(currentScreenIndex)?.screenName ?: ""
+        val screen = DeviceOcrStrategy.screenName(template.machineId, currentScreenIndex)
         binding.btnLaunchCamera.text = "📷 拍第 $current/$total 屏 · $screen"
     }
 }
