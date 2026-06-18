@@ -2,6 +2,7 @@ package com.zhongshan.meterreader
 
 import android.app.Application
 import android.util.Log
+import com.zhongshan.meterreader.data.RoiConfigManager
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
@@ -14,6 +15,8 @@ class MeterReaderApp : Application() {
         super.onCreate()
         PresetManager.init(this)
         RecognitionResultHolder.init(this)
+        // 【新增】：初始化 ROI 坐标配置管理器，防止运行时空指针崩溃
+        RoiConfigManager.init(this)
         setupGlobalCrashHandler()
     }
 
