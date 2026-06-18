@@ -1,6 +1,6 @@
 package com.zhongshan.meterreader
 
-import com.zhongshan.meterreader.util.OCREngine.OcrLine  // 【关键修复】必须添加这一行
+import com.zhongshan.meterreader.util.OCREngine.OcrLine
 
 object DeviceOcrStrategy {
 
