@@ -10,6 +10,7 @@ import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -158,6 +159,48 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // =====================================================================
+        // 【新增】：点击「定标」按钮，弹出选择屏幕，跳转至定标器
+        // =====================================================================
+        binding.btnRoiCalibration.setOnClickListener {
+            if (isFinishing || selectedTemplate == null) return@setOnClickListener
+            val template = selectedTemplate!!
+            val machineId = template.machineId
+            val totalScreens = DeviceOcrStrategy.totalScreens(machineId)
+
+            // 如果只有一屏（比如约克离心机），直接跳转，不弹窗
+            if (totalScreens <= 1) {
+                val fieldData = DeviceOcrStrategy.getFieldList(machineId, 0)
+                startActivity(Intent(this@MainActivity, RoiConfigActivity::class.java).apply {
+                    putExtra("machineId", machineId)
+                    putExtra("screenIndex", 0)
+                    putStringArrayListExtra("fieldIds", ArrayList(fieldData.first))
+                    putStringArrayListExtra("fieldLabels", ArrayList(fieldData.second))
+                })
+                return@setOnClickListener
+            }
+
+            // 特灵螺杆机有多屏，必须让管理员选要定标第几屏
+            val screenOptions = (0 until totalScreens).map {
+                DeviceOcrStrategy.screenName(machineId, it)
+            }.toTypedArray()
+
+            AlertDialog.Builder(this@MainActivity)
+                .setTitle("请选择要定标的屏幕")
+                .setItems(screenOptions) { _, which ->
+                    val screenIndex = which
+                    val fieldData = DeviceOcrStrategy.getFieldList(machineId, screenIndex)
+                    startActivity(Intent(this@MainActivity, RoiConfigActivity::class.java).apply {
+                        putExtra("machineId", machineId)
+                        putExtra("screenIndex", screenIndex)
+                        putStringArrayListExtra("fieldIds", ArrayList(fieldData.first))
+                        putStringArrayListExtra("fieldLabels", ArrayList(fieldData.second))
+                    })
+                }
+                .setNegativeButton("取消", null)
+                .show()
+        }
+
         binding.btnTransferAndFill.setOnClickListener {
             val template = selectedTemplate ?: return@setOnClickListener
             lifecycleScope.launch {
@@ -173,7 +216,6 @@ class MainActivity : AppCompatActivity() {
                 val finalData = HashMap(cachedData)
                 finalData.putAll(PresetManager.getPresetsForMachine(template.machineId))
 
-                // 【安全处理】：防止 pumpFieldIds 属性不存在导致编译失败
                 val pumpIds = try {
                     val method = template.javaClass.getMethod("getPumpFieldIds")
                     (method.invoke(template) as? List<*>)?.map { it.toString() }?.toTypedArray() ?: emptyArray()
@@ -199,6 +241,7 @@ class MainActivity : AppCompatActivity() {
         binding.btnGallery.isEnabled = !processing
         binding.btnTransferAndFill.isEnabled = !processing
         binding.btnPresetSettings.isEnabled = !processing
+        binding.btnRoiCalibration.isEnabled = !processing
         binding.progressBar.visibility = if (processing) View.VISIBLE else View.GONE
     }
 
@@ -214,7 +257,6 @@ class MainActivity : AppCompatActivity() {
 
     private suspend fun processImageSuspend(uri: Uri) {
         val template = selectedTemplate ?: return
-
         val result = OCRFacade.performSmartOcr(
             this@MainActivity, uri, template, currentScreenIndex
         )
@@ -226,7 +268,6 @@ class MainActivity : AppCompatActivity() {
         val aggregatedData =
             RecognitionResultHolder.getFieldsForMachine(template.machineId)
 
-        // 【修复点 1】：直接从 key 中解析中文标签，彻底抛弃不存在的 template.screens
         binding.tvDataPreview.text = aggregatedData.entries
             .sortedBy { it.key }
             .joinToString("\n") { (k, v) ->
@@ -234,7 +275,6 @@ class MainActivity : AppCompatActivity() {
                 "  $label：$v"
             }
 
-        // 【修复点 2】：使用 DeviceOcrStrategy 获取总屏数
         val totalScreens = DeviceOcrStrategy.totalScreens(template.machineId)
 
         if (result.isNotEmpty()) {
@@ -260,12 +300,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 【修复点 3】：删除了原来依赖 template.screens 的 buildFieldLabelMap 方法
-
     private fun updateScreenProgress() {
         val template = selectedTemplate ?: return
-        
-        // 【修复点 4】：使用 DeviceOcrStrategy 获取总屏数和当前屏名称
         val total = DeviceOcrStrategy.totalScreens(template.machineId)
         
         if (template.isHeatExchanger || total <= 1) {
