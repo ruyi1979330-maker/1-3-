@@ -48,8 +48,6 @@ class RoiConfigActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 需要创建一个 layout/activity_roi_config.xml，放置一个 ImageView 和下方的按钮
-        // 建议 xml 代码见下方的【XML布局补充说明】
         setContentView(R.layout.activity_roi_config)
 
         imageView = findViewById(R.id.ivRoiImage)
@@ -88,8 +86,8 @@ class RoiConfigActivity : AppCompatActivity() {
                 Toast.makeText(this, "框选面积太小，请重新框选", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            // 保存配置
-            RoiConfigManager.saveRoiConfigs(this, machineId, screenIndex, roiBoxes)
+            // 【修复点】：删除了多余的 this 参数
+            RoiConfigManager.saveRoiConfigs(machineId, screenIndex, roiBoxes)
             Toast.makeText(this, "第 ${currentBoxIndex+1}/${fieldIds.size} 个区域已保存", Toast.LENGTH_SHORT).show()
             btnNext.performClick()
         }
@@ -121,14 +119,20 @@ class RoiConfigActivity : AppCompatActivity() {
                     if (!isDrawing) return@setOnTouchListener true
                     val endX = event.x * scaleX
                     val endY = event.y * scaleY
-                    roiBoxes.add(RoiBox(
+                    // 每次触摸重新创建 RoiBox 覆盖上一次，防止多次框选
+                    val newBox = RoiBox(
                         xPercent = startX / bmp.width,
                         yPercent = startY / bmp.height,
                         wPercent = (endX - startX) / bmp.width,
                         hPercent = (endY - startY) / bmp.height,
                         fieldId = fieldIds[currentBoxIndex],
                         label = fieldLabels[currentBoxIndex]
-                    ))
+                    )
+                    if (currentBoxIndex < roiBoxes.size) {
+                        roiBoxes[currentBoxIndex] = newBox
+                    } else {
+                        roiBoxes.add(newBox)
+                    }
                     drawOverlay()
                     isDrawing = false
                     btnSave.isEnabled = true
