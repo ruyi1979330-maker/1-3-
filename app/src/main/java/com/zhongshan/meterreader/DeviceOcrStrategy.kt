@@ -1,7 +1,5 @@
 package com.zhongshan.meterreader
 
-import com.zhongshan.meterreader.util.OCREngine.OcrLine // 【重点】确保这一行绝对存在
-
 object DeviceOcrStrategy {
 
     data class FieldRule(
@@ -11,28 +9,6 @@ object DeviceOcrStrategy {
         val maxBelow: Int = 5,
         val formLabel: String = ""
     )
-
-    private fun getLineText(line: Any): String {
-        return try {
-            line.javaClass.methods.firstOrNull { it.name == "getText" || it.name == "text" }?.invoke(line) as? String ?: ""
-        } catch (e: Exception) { "" }
-    }
-
-    private fun getLineY(line: Any): Int {
-        return try {
-            val bboxMethod = line.javaClass.methods.firstOrNull { 
-                it.name == "getBoundingBox" || it.name == "getFrame" || it.name == "getRect" || it.name == "boundingBox"
-            }
-            val bbox = bboxMethod?.invoke(line)
-            if (bbox != null) {
-                bbox.javaClass.methods.firstOrNull { it.name == "top" || it.name == "getTop" }?.invoke(bbox) as? Int ?: 0
-            } else {
-                line.javaClass.methods.firstOrNull { it.name == "top" || it.name == "getTop" || it.name == "y" || it.name == "getY" }?.invoke(line) as? Int ?: 0
-            }
-        } catch (e: Exception) { 0 }
-    }
-
-    private val numberRegex = Regex("\\d+(\\.\\d+)?")
 
     private fun traneScrewRules(prefix: Int): Map<Int, List<FieldRule>> {
         val off = when (prefix) { 2 -> 30; 3 -> 50; else -> 0 }
@@ -97,83 +73,6 @@ object DeviceOcrStrategy {
         )
     }
 
-    fun extract(lines: List<OcrLine>, machineId: String, screenIndex: Int): Map<String, String> {
-        val rules: List<FieldRule> = when {
-            machineId == "screw_1"   -> traneScrewRules(1)[screenIndex] ?: emptyList()
-            machineId == "screw_2"   -> traneScrewRules(2)[screenIndex] ?: emptyList()
-            machineId == "screw_3"   -> traneScrewRules(3)[screenIndex] ?: emptyList()
-            machineId == "cent_1"    -> yorkCentRules()
-            machineId == "screw_3_1" -> yorkScrewRules(1)
-            machineId == "screw_3_2" -> yorkScrewRules(2)
-            else -> emptyList()
-        }
-
-        val sortedLines = lines.sortedBy { getLineY(it) }
-        val extractedValues = mutableMapOf<String, String>()
-
-        for (rule in rules) {
-            val anchorIndex = sortedLines.indexOfFirst { line ->
-                val text = getLineText(line)
-                rule.keywords.any { kw -> text.contains(kw, ignoreCase = true) }
-            }
-
-            if (anchorIndex != -1) {
-                val anchorText = getLineText(sortedLines[anchorIndex])
-
-                if (!rule.searchBelow) {
-                    val cleanVal = cleanNumber(anchorText)
-                    if (cleanVal != null) {
-                        extractedValues[rule.fieldId] = cleanVal
-                        continue
-                    }
-                }
-
-                var belowCount = 0
-                var lastY = getLineY(sortedLines[anchorIndex])
-                
-                for (i in anchorIndex + 1 until sortedLines.size) {
-                    val currentY = getLineY(sortedLines[i])
-                    if (currentY - lastY > 40) {
-                        belowCount++
-                        lastY = currentY
-                    }
-                    if (belowCount > rule.maxBelow) break
-
-                    val text = getLineText(sortedLines[i])
-                    val cleanVal = cleanNumber(text)
-                    if (cleanVal != null) {
-                        extractedValues[rule.fieldId] = cleanVal
-                        break
-                    }
-                }
-            }
-        }
-
-        val finalResult = LinkedHashMap<String, String>()
-        for (rule in rules) {
-            val value = extractedValues[rule.fieldId] ?: continue
-            val key = if (rule.formLabel.isNotEmpty()) "${rule.fieldId}|${rule.formLabel}" else rule.fieldId
-            finalResult[key] = value
-        }
-        return finalResult
-    }
-
-    private fun cleanNumber(text: String): String? {
-        val match = numberRegex.find(text) ?: return null
-        var clean = match.value.replace(Regex("[^0-9.]"), "")
-        val parts = clean.split(".")
-        if (parts.size > 2) {
-            clean = parts[0] + "." + parts.subList(1, parts.size).joinToString("")
-        }
-        if (clean.isEmpty() || clean == ".") return null
-        
-        val fVal = clean.toFloatOrNull()
-        if (fVal != null && fVal in -100f..9999f) {
-            return clean
-        }
-        return null
-    }
-
     fun totalScreens(machineId: String): Int = when {
         machineId == "screw_1" || machineId == "screw_2" || machineId == "screw_3" -> 3
         else -> 1
@@ -189,7 +88,7 @@ object DeviceOcrStrategy {
     }
 
     // =====================================================================
-    // 【新增】：供「定标器」获取对应机器每一屏的字段 ID 和中文名称
+    // 仅供「定标器」获取对应机器每一屏的字段 ID 和中文名称
     // =====================================================================
     fun getFieldList(machineId: String, screenIndex: Int): Pair<List<String>, List<String>> {
         val rules: List<FieldRule> = when {
