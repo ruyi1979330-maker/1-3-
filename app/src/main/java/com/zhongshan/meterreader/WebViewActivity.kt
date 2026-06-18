@@ -19,8 +19,8 @@ class WebViewActivity : AppCompatActivity() {
 
     companion object {
         private const val WEB_LOAD_TIMEOUT_MS = 20_000L
-        // 【修复】：将填值间隔从 120ms 拉长到 400ms，给前端框架足够的响应时间，防止被覆盖
-        private const val FIELD_FILL_INTERVAL = 400 
+        // 【修复1】：填表间隔拉长到 800ms，让前端防抖和校验有充足时间跑完，彻底解决覆盖问题
+        private const val FIELD_FILL_INTERVAL = 800L 
     }
 
     internal lateinit var binding: ActivityWebviewBinding
@@ -45,15 +45,9 @@ class WebViewActivity : AppCompatActivity() {
                 act.binding.tvStatusBanner.visibility = View.VISIBLE
                 act.binding.tvStatusBanner.text = "⏳ 检测到「$tabText」被点击，正在等待渲染后自动填表…"
                 
-                val delays = listOf(1000L, 2000L, 3500L)
-                for (delay in delays) {
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        if (!act.isFinishing && !act.isDestroyed && !act.isFillDone.get()) {
-                            act.isFillDone.set(false) 
-                            act.binding.webView.evaluateJavascript(act.fillJsPayload, null)
-                        }
-                    }, delay)
-                }
+                // 【修复2】：移除了以前那种 1s, 2s, 3.5s 多次触发填表的死循环
+                // 只在点击时触发一次即可，减少冲突
+                act.binding.webView.evaluateJavascript(act.fillJsPayload, null)
             }
         }
 
@@ -64,13 +58,12 @@ class WebViewActivity : AppCompatActivity() {
                 if (act.isFillDone.compareAndSet(false, true)) {
                     act.binding.tvStatusBanner.visibility = View.VISIBLE
                     act.binding.tvStatusBanner.text =
-                        if (count > 0) "✅ 成功填入 $count 个字段！请人工核对后提交。"
-                        else           "⚠️ 填入0个字段。请确保当前标签页内容已完全加载。"
+                        if (count > 0) "✅ 成功填入 $count 个字段！人工核对无误后提交。"
+                        else           "⚠️ 填入0个字段，可能表单未加载完全。"
                 }
             }
         }
         
-        // 【新增】：接收 JS 端的调试日志，方便在 Logcat 中查看 JS 到底在干嘛
         @JavascriptInterface
         fun log(msg: String) {
             Log.d("WebViewJS", msg)
@@ -102,7 +95,6 @@ class WebViewActivity : AppCompatActivity() {
         binding.webView.addJavascriptInterface(SafeWebBridge(this), "AndroidBridge")
 
         binding.webView.webViewClient = object : WebViewClient() {
-
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 isFillDone.set(false)
                 isMonitorInjected.set(false)
@@ -146,7 +138,6 @@ class WebViewActivity : AppCompatActivity() {
                     binding.tvStatusBanner.visibility     = View.GONE
                 }
             }
-
             override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
                 handler?.proceed() // 医院内网证书可能有问题，直接放行
             }
@@ -161,6 +152,7 @@ class WebViewActivity : AppCompatActivity() {
     }
 
     private fun compileTabMonitorJs(): String {
+        // 注意：你提到的 1号机房有5个标签，3号机房有4个标签
         val tabs = listOf("螺杆机组","离心机组","板交","螺杆机","交接班","操作记录")
         val tabsJs = tabs.joinToString(",") { "'${it.esc()}'" }
         return """
@@ -181,18 +173,6 @@ class WebViewActivity : AppCompatActivity() {
     }
   }
   document.addEventListener('click', onDocClick, true);
-  
-  var debounceTimer = null;
-  var observer = new MutationObserver(function(mutations) {
-    var hasChange = mutations.some(function(m) { return m.addedNodes.length > 2; });
-    if (hasChange) {
-      clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(function() {
-        if (window.__fillForm) window.__fillForm();
-      }, 1000);
-    }
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
 })();
         """.trimIndent()
     }
@@ -249,17 +229,15 @@ function setVal(el, v){
   var proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
   var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
   
-  // 延迟 50ms 填入，避开前端防抖冲突
   setTimeout(function() {
     if(setter){ setter.call(el, v); } else { el.value = v; }
-    
-    // 完整模拟人类键盘输入事件链，防止被前端状态机覆盖
     el.dispatchEvent(new Event('focus', {bubbles:true}));
     el.dispatchEvent(new KeyboardEvent('keydown', {bubbles:true}));
     el.dispatchEvent(new KeyboardEvent('keypress', {bubbles:true}));
     el.dispatchEvent(new InputEvent('input', {bubbles:true, cancelable:true, inputType:'insertText', data:v}));
     el.dispatchEvent(new KeyboardEvent('keyup', {bubbles:true}));
     el.dispatchEvent(new Event('change', {bubbles:true}));
+    // 【修复3】：触发失焦事件，强制表单完成该输入框的校验
     el.dispatchEvent(new Event('blur', {bubbles:true}));
   }, 50);
 }
