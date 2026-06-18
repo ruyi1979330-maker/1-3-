@@ -28,6 +28,11 @@
             android:screenOrientation="portrait"
             android:theme="@style/Theme.MeterReader.NoActionBar" />
 
+        <!-- 【关键新增】：添加定标器配置页面的注册 -->
+        <activity 
+            android:name=".RoiConfigActivity" 
+            android:screenOrientation="portrait" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
