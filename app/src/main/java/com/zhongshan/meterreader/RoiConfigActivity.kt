@@ -19,6 +19,7 @@ import com.zhongshan.meterreader.data.RoiBox
 import com.zhongshan.meterreader.data.RoiConfigManager
 import com.zhongshan.meterreader.util.StorageAndImageUtils
 import kotlinx.coroutines.launch
+import java.lang.Math.abs // 【修复2】：引入绝对值计算防负宽高
 
 class RoiConfigActivity : AppCompatActivity() {
 
@@ -81,12 +82,14 @@ class RoiConfigActivity : AppCompatActivity() {
                 finish()
             }
         }
+        
+        // 【修复1】：修正保存按钮逻辑
         btnSave.setOnClickListener {
-            if (currentBoxIndex <= roiBoxes.lastIndex && roiBoxes[currentBoxIndex].wPercent > 0.02) {
+            // 如果框宽度的百分比小于 1%，才提示太小；之前写成大于 2% 导致完全无法保存
+            if (currentBoxIndex <= roiBoxes.lastIndex && roiBoxes[currentBoxIndex].wPercent < 0.01) {
                 Toast.makeText(this, "框选面积太小，请重新框选", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            // 【修复点】：删除了多余的 this 参数
             RoiConfigManager.saveRoiConfigs(machineId, screenIndex, roiBoxes)
             Toast.makeText(this, "第 ${currentBoxIndex+1}/${fieldIds.size} 个区域已保存", Toast.LENGTH_SHORT).show()
             btnNext.performClick()
@@ -119,12 +122,12 @@ class RoiConfigActivity : AppCompatActivity() {
                     if (!isDrawing) return@setOnTouchListener true
                     val endX = event.x * scaleX
                     val endY = event.y * scaleY
-                    // 每次触摸重新创建 RoiBox 覆盖上一次，防止多次框选
+                    // 【修复2】：使用 abs 取绝对值，防止工人从右向左画框时宽/高变成负数
                     val newBox = RoiBox(
                         xPercent = startX / bmp.width,
                         yPercent = startY / bmp.height,
-                        wPercent = (endX - startX) / bmp.width,
-                        hPercent = (endY - startY) / bmp.height,
+                        wPercent = abs(endX - startX) / bmp.width,
+                        hPercent = abs(endY - startY) / bmp.height,
                         fieldId = fieldIds[currentBoxIndex],
                         label = fieldLabels[currentBoxIndex]
                     )
