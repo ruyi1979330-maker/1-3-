@@ -23,7 +23,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
-import kotlin.math.round // 【新增】导入四舍五入函数
+import kotlin.math.round // 【导入】四舍五入函数
 
 class MainActivity : AppCompatActivity() {
 
@@ -221,31 +221,26 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 // =====================================================================
-                // 约克离心机 & 约克螺杆机的 ×2.5 换算，取整数四舍五入
+                // 约克离心机 & 约克螺杆机的 ×2.5 换算，四舍五入精确到十位数（10的倍数）
                 // =====================================================================
                 when (template.machineId) {
                     "cent_1" -> {
-                        // 从屏幕获取的"压缩机导液开度" (%满载安培)
                         val loadPct = getValueByRawId(finalData, "field_1_82")?.toFloatOrNull()
                         if (loadPct != null) {
-                            // 【已修改】：先乘 2.5，再用 round 四舍五入取整，转成字符串
-                            finalData["field_1_85"] = round(loadPct * 2.5f).toInt().toString()
+                            // 【修正】：先乘 2.5，除以10取整，再乘10（实现精确到十位数的四舍五入）
+                            finalData["field_1_85"] = (round(loadPct * 2.5f / 10.0f) * 10).toInt().toString()
                         }
                     }
                     "screw_3_1" -> {
-                        // 从屏幕获取的"1# 压缩机滑阀位置"
                         val loadPct = getValueByRawId(finalData, "field_3_17")?.toFloatOrNull()
                         if (loadPct != null) {
-                            // 【已修改】：先乘 2.5，再用 round 四舍五入取整，转成字符串
-                            finalData["field_3_20"] = round(loadPct * 2.5f).toInt().toString()
+                            finalData["field_3_20"] = (round(loadPct * 2.5f / 10.0f) * 10).toInt().toString()
                         }
                     }
                     "screw_3_2" -> {
-                        // 从屏幕获取的"2# 压缩机滑阀位置"
                         val loadPct = getValueByRawId(finalData, "field_3_47")?.toFloatOrNull()
                         if (loadPct != null) {
-                            // 【已修改】：先乘 2.5，再用 round 四舍五入取整，转成字符串
-                            finalData["field_3_50"] = round(loadPct * 2.5f).toInt().toString()
+                            finalData["field_3_50"] = (round(loadPct * 2.5f / 10.0f) * 10).toInt().toString()
                         }
                     }
                 }
