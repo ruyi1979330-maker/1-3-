@@ -161,7 +161,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         // =====================================================================
-        // 【修复】：定标按钮报错处理（针对板交拦截的彻底修复）
+        // 【修复】：定标按钮报错处理
         // =====================================================================
         binding.btnRoiCalibration.setOnClickListener {
             if (isFinishing || selectedTemplate == null) return@setOnClickListener
@@ -178,7 +178,6 @@ class MainActivity : AppCompatActivity() {
 
             if (totalScreens <= 1) {
                 val fieldData = DeviceOcrStrategy.getFieldList(machineId, 0)
-                // 如果 fieldIds 为空，则说明机器配置出错，弹出提示阻止跳转
                 if (fieldData.first.isEmpty()) {
                     Toast.makeText(this@MainActivity, "错误：该设备未配置定标字段，无法定标", Toast.LENGTH_LONG).show()
                     return@setOnClickListener
@@ -201,10 +200,10 @@ class MainActivity : AppCompatActivity() {
                 .setItems(screenOptions) { _, which ->
                     val screenIndex = which
                     val fieldData = DeviceOcrStrategy.getFieldList(machineId, screenIndex)
-                    // 同样的容错机制，防止设备ID不存在导致的空数据跳转
+                    // 【修复】：在 setItems 的回调中使用 return@setItems，避免编译错误
                     if (fieldData.first.isEmpty()) {
                         Toast.makeText(this@MainActivity, "错误：该设备未配置定标字段，无法定标", Toast.LENGTH_LONG).show()
-                        return@setOnClickListener
+                        return@setItems
                     }
                     startActivity(Intent(this@MainActivity, RoiConfigActivity::class.java).apply {
                         putExtra("machineId", machineId)
@@ -218,7 +217,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         // =====================================================================
-        // 【核心推送与换算逻辑】(已兼容取整到十位数)
+        // 【核心推送与换算逻辑】
         // =====================================================================
         binding.btnTransferAndFill.setOnClickListener {
             val template = selectedTemplate ?: return@setOnClickListener
