@@ -23,7 +23,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
-import kotlin.math.round // 【导入】四舍五入函数
+import kotlin.math.round
 
 class MainActivity : AppCompatActivity() {
 
@@ -160,9 +160,19 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // =====================================================================
+        // 【修复】：定标按钮报错处理
+        // =====================================================================
         binding.btnRoiCalibration.setOnClickListener {
             if (isFinishing || selectedTemplate == null) return@setOnClickListener
             val template = selectedTemplate!!
+
+            // 【关键拦截】：如果当前选中的是板交，直接阻止进入定标页面，并给出明确提示
+            if (template.isHeatExchanger) {
+                Toast.makeText(this@MainActivity, "板交为预设数据截图，无需定标。请直接使用【相册】选取预填截图识别。", Toast.LENGTH_LONG).show()
+                return@setOnClickListener
+            }
+
             val machineId = template.machineId
             val totalScreens = DeviceOcrStrategy.totalScreens(machineId)
 
@@ -198,7 +208,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         // =====================================================================
-        // 【核心推送与换算逻辑】
+        // 【核心推送与换算逻辑】(已兼容取整到十位数)
         // =====================================================================
         binding.btnTransferAndFill.setOnClickListener {
             val template = selectedTemplate ?: return@setOnClickListener
@@ -215,19 +225,14 @@ class MainActivity : AppCompatActivity() {
                 val finalData = HashMap(cachedData)
                 finalData.putAll(PresetManager.getPresetsForMachine(template.machineId))
 
-                // 因为缓存的数据键名带有 "|中文标签"，必须用前缀匹配才能找到正确数值
                 fun getValueByRawId(data: Map<String, String>, rawId: String): String? {
                     return data.entries.find { it.key.startsWith("$rawId|") || it.key == rawId }?.value
                 }
 
-                // =====================================================================
-                // 约克离心机 & 约克螺杆机的 ×2.5 换算，四舍五入精确到十位数（10的倍数）
-                // =====================================================================
                 when (template.machineId) {
                     "cent_1" -> {
                         val loadPct = getValueByRawId(finalData, "field_1_82")?.toFloatOrNull()
                         if (loadPct != null) {
-                            // 【修正】：先乘 2.5，除以10取整，再乘10（实现精确到十位数的四舍五入）
                             finalData["field_1_85"] = (round(loadPct * 2.5f / 10.0f) * 10).toInt().toString()
                         }
                     }
@@ -245,7 +250,6 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                // 安全获取泵ID
                 val pumpIds = try {
                     val method = template.javaClass.getMethod("getPumpFieldIds")
                     (method.invoke(template) as? List<*>)?.map { it.toString() }?.toTypedArray() ?: emptyArray()
