@@ -54,13 +54,13 @@ object OCREngine {
     }
 
     // =====================================================================
-    // 【修复】：板交截图识别方法（解决未识别到有效数据问题）
+    // 【修复】：板交截图识别方法（已补充协程作用域，修复编译报错）
     // =====================================================================
-    fun extractPlateData(
+    suspend fun extractPlateData(
         bitmap: Bitmap,
         isRoom1: Boolean,
         plateKeywordMap: Map<String, String>
-    ): Map<String, String> {
+    ): Map<String, String> = withContext(Dispatchers.IO) {
         val outData = HashMap<String, String>()
         try {
             val image = InputImage.fromBitmap(bitmap, 0)
@@ -91,7 +91,7 @@ object OCREngine {
         } catch (e: Exception) {
             e.printStackTrace()
         }
-        return outData
+        return@withContext outData
     }
 
     private fun extractNextNumericValue(lines: List<String>, currentIndex: Int): String? {
