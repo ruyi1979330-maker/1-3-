@@ -154,9 +154,16 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 【修复】：彻底关闭手机端定标器入口
-        binding.btnRoiCalibration.setOnClickListener {
-            Toast.makeText(this, "手机端定标已关闭。请使用电脑端定标，硬编码坐标写入 DeviceOcrStrategy.kt 中。", Toast.LENGTH_LONG).show()
+        // 【修复1】：彻底隐藏定标按钮，不让工人再看到它
+        binding.btnRoiCalibration.visibility = View.GONE
+        // 同时也彻底禁用点击事件
+        binding.btnRoiCalibration.isEnabled = false
+
+        // 【修复2】：恢复你原本的齿轮预设值按钮点击事件
+        binding.btnPresetSettings.setOnClickListener {
+            if (!isProcessing && !isFinishing) {
+                startActivity(Intent(this, PresetSettingsActivity::class.java))
+            }
         }
 
         // =====================================================================
@@ -227,7 +234,6 @@ class MainActivity : AppCompatActivity() {
         binding.btnGallery.isEnabled = !processing
         binding.btnTransferAndFill.isEnabled = !processing
         binding.btnPresetSettings.isEnabled = !processing
-        binding.btnRoiCalibration.isEnabled = !processing
         binding.progressBar.visibility = if (processing) View.VISIBLE else View.GONE
     }
 
