@@ -10,6 +10,45 @@ object DeviceOcrStrategy {
         val formLabel: String = ""
     )
 
+    // =====================================================================
+    // 【电脑端硬编码定标配置】（你在电脑上量好坐标，填在这里）
+    // =====================================================================
+    data class HardcodedRoi(
+        val xPercent: Float, // 左上角X相对宽度百分比 (0.0~1.0)
+        val yPercent: Float, // 左上角Y相对高度百分比 (0.0~1.0)
+        val wPercent: Float, // 框的宽度百分比
+        val hPercent: Float, // 框的高度百分比
+        val fieldId: String,
+        val label: String
+    )
+
+    private val hardcodedConfigs = mapOf(
+        // 格式： "机器ID_屏索引" 到 "List<HardcodedRoi>"
+        // 示例（特灵1号机蒸发器屏）：
+        "screw_1_0" to listOf(
+            HardcodedRoi(0.40f, 0.15f, 0.15f, 0.05f, "field_1_01", "1#蒸发器进口 水温"),
+            // 你在下方继续添加你测量好的坐标：
+            // HardcodedRoi(0.40f, 0.22f, 0.15f, 0.05f, "field_1_02", "1#蒸发器出口 水温"),
+            // ...
+        ),
+        // 示例（约克离心机总览）：
+        "cent_1_0" to listOf(
+            HardcodedRoi(0.45f, 0.30f, 0.15f, 0.06f, "field_1_69", "蒸发器 出水温度"),
+            // ...
+        ),
+        // 示例（3号约克螺杆机1#）：
+        "screw_3_1_0" to listOf(
+            HardcodedRoi(0.45f, 0.25f, 0.15f, 0.05f, "field_3_02", "1#蒸发器 出水温度"),
+            // ...
+        )
+    )
+
+    fun getHardcodedRois(machineId: String, screenIndex: Int): List<HardcodedRoi> {
+        return hardcodedConfigs["${machineId}_${screenIndex}"] ?: emptyList()
+    }
+    // =====================================================================
+
+
     private fun traneScrewRules(prefix: Int): Map<Int, List<FieldRule>> {
         val off = when (prefix) { 2 -> 30; 3 -> 50; else -> 0 }
         val no = when (prefix) { 2 -> "2#"; 3 -> "3#"; else -> "1#" }
@@ -87,9 +126,6 @@ object DeviceOcrStrategy {
         else                            -> "全组板交"
     }
 
-    // =====================================================================
-    // 仅供「定标器」获取对应机器每一屏的字段 ID 和中文名称
-    // =====================================================================
     fun getFieldList(machineId: String, screenIndex: Int): Pair<List<String>, List<String>> {
         val rules: List<FieldRule> = when {
             machineId == "screw_1"   -> traneScrewRules(1)[screenIndex] ?: emptyList()
