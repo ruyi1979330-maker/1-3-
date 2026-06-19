@@ -154,66 +154,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        binding.btnPresetSettings.setOnClickListener {
-            if (!isProcessing && !isFinishing) {
-                startActivity(Intent(this, PresetSettingsActivity::class.java))
-            }
-        }
-
-        // =====================================================================
-        // 【修复】：定标按钮报错处理
-        // =====================================================================
+        // 【修复】：彻底关闭手机端定标器入口
         binding.btnRoiCalibration.setOnClickListener {
-            if (isFinishing || selectedTemplate == null) return@setOnClickListener
-            val template = selectedTemplate!!
-
-            // 【关键拦截】：如果当前选中的是板交，直接阻止进入定标页面，并给出明确提示
-            if (template.isHeatExchanger) {
-                Toast.makeText(this@MainActivity, "板交为预设数据截图，无需定标。请直接使用【相册】选取预填截图识别。", Toast.LENGTH_LONG).show()
-                return@setOnClickListener
-            }
-
-            val machineId = template.machineId
-            val totalScreens = DeviceOcrStrategy.totalScreens(machineId)
-
-            if (totalScreens <= 1) {
-                val fieldData = DeviceOcrStrategy.getFieldList(machineId, 0)
-                if (fieldData.first.isEmpty()) {
-                    Toast.makeText(this@MainActivity, "错误：该设备未配置定标字段，无法定标", Toast.LENGTH_LONG).show()
-                    return@setOnClickListener
-                }
-                startActivity(Intent(this@MainActivity, RoiConfigActivity::class.java).apply {
-                    putExtra("machineId", machineId)
-                    putExtra("screenIndex", 0)
-                    putStringArrayListExtra("fieldIds", ArrayList(fieldData.first))
-                    putStringArrayListExtra("fieldLabels", ArrayList(fieldData.second))
-                })
-                return@setOnClickListener
-            }
-
-            val screenOptions = (0 until totalScreens).map {
-                DeviceOcrStrategy.screenName(machineId, it)
-            }.toTypedArray()
-
-            AlertDialog.Builder(this@MainActivity)
-                .setTitle("请选择要定标的屏幕")
-                .setItems(screenOptions) { _, which ->
-                    val screenIndex = which
-                    val fieldData = DeviceOcrStrategy.getFieldList(machineId, screenIndex)
-                    // 【修复】：在 setItems 的回调中使用 return@setItems，避免编译错误
-                    if (fieldData.first.isEmpty()) {
-                        Toast.makeText(this@MainActivity, "错误：该设备未配置定标字段，无法定标", Toast.LENGTH_LONG).show()
-                        return@setItems
-                    }
-                    startActivity(Intent(this@MainActivity, RoiConfigActivity::class.java).apply {
-                        putExtra("machineId", machineId)
-                        putExtra("screenIndex", screenIndex)
-                        putStringArrayListExtra("fieldIds", ArrayList(fieldData.first))
-                        putStringArrayListExtra("fieldLabels", ArrayList(fieldData.second))
-                    })
-                }
-                .setNegativeButton("取消", null)
-                .show()
+            Toast.makeText(this, "手机端定标已关闭。请使用电脑端定标，硬编码坐标写入 DeviceOcrStrategy.kt 中。", Toast.LENGTH_LONG).show()
         }
 
         // =====================================================================
