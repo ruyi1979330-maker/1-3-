@@ -1,6 +1,7 @@
 package com.zhongshan.meterreader
 
 import android.content.Context
+import android.graphics.Bitmap // 【关键修复】：补上了这一行！
 import android.net.Uri
 import android.widget.Toast
 import com.zhongshan.meterreader.data.DeviceTemplate
@@ -78,8 +79,6 @@ object OCRFacade {
                 val number = OCREngine.extractPureNumber(croppedBmp)
                 if (number != null && number.isNotEmpty()) {
                     results[roi.fieldId] = number
-                } else {
-                    // 如果某个特定数据没识别出来，就只做内部记录，不弹Toast刷屏
                 }
             }
 
