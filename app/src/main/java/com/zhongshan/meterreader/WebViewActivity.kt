@@ -19,7 +19,7 @@ class WebViewActivity : AppCompatActivity() {
 
     companion object {
         private const val WEB_LOAD_TIMEOUT_MS = 20_000L
-        private const val AUTO_SCAN_INTERVAL_MS = 500L 
+        private const val AUTO_SCAN_INTERVAL_MS = 500L
     }
 
     internal lateinit var binding: ActivityWebviewBinding
@@ -135,8 +135,8 @@ class WebViewActivity : AppCompatActivity() {
         sb.append("(function(){")
         sb.append("if(window.__ocrFillEngineStarted) return;")
         sb.append("window.__ocrFillEngineStarted = true;")
-        
-        // 破除原生四舍五入限制
+
+        // 去除 toFixed 钩子可能引发的英文 locale 切换
         sb.append("""
             if(!window.__toFixedHooked){
                 window.__toFixedHooked = true;
@@ -162,19 +162,19 @@ class WebViewActivity : AppCompatActivity() {
             var el = document.getElementById(item.id) || document.querySelector('[name="'+item.id+'"]');
             if(el && isValidInput(el)) return el;
             if(!item.label) return null;
-            
-            var cleanLabel = item.label.replace(/\s+/g, '').replace(/（.*?）|\(.*?\)/g, ''); 
+
+            // 清洗干扰字符
+            var cleanLabel = item.label.replace(/\s+/g, '').replace(/（预设值）|\(预设值\)|（.*?）|\(.*?\)/g, '');
             
             var machinePrefix = null;
             var coreMetric = cleanLabel;
-            // 优化前缀匹配：兼容“离心机1#”、“机组2”等所有变体
             var matchPrefix = cleanLabel.match(/(?:机组|离心机|螺杆机)?(\d+)(?:#|号|机)/);
             if(matchPrefix){
                 machinePrefix = matchPrefix[1];
                 coreMetric = cleanLabel.replace(matchPrefix[0], '');
             }
 
-            // 【策略 A】：多机组动态网格穿透
+            // 策略 A：表格动态匹配
             if(machinePrefix){
                 var tables = document.querySelectorAll('table, .el-table');
                 for(var t=0; t<tables.length; t++){
@@ -197,7 +197,6 @@ class WebViewActivity : AppCompatActivity() {
                                               rowTxt.indexOf(machinePrefix + '号') > -1 || 
                                               rowTxt.indexOf('机组' + machinePrefix) > -1 ||
                                               (row.cells && row.cells[0] && (row.cells[0].innerText || '').replace(/\s+/g, '').indexOf(machinePrefix) > -1);
-                            
                             if(isTargetRow){
                                 var cells = row.querySelectorAll('td');
                                 if(cells[colIndex]){
@@ -210,12 +209,11 @@ class WebViewActivity : AppCompatActivity() {
                 }
             }
 
-            // 【策略 B】：扁平化表单兜底
+            // 策略 B：扁平化兜底
             var allNodes = document.querySelectorAll('*');
             for(var i=0; i<allNodes.length; i++){
                 var node = allNodes[i];
                 if(node.children.length > 0 && node.tagName !== 'LABEL' && node.tagName !== 'TD' && node.tagName !== 'TH') continue;
-                
                 var txt = (node.innerText || node.textContent || '').replace(/\s+/g, '');
                 if(txt.indexOf(cleanLabel) >= 0 || (machinePrefix && txt.indexOf(coreMetric) >= 0)){
                     var parent = node;
@@ -231,7 +229,6 @@ class WebViewActivity : AppCompatActivity() {
             return null;
         }
 
-        // 强力过滤隔离防护：彻底根治英文“Select All”崩溃问题，绝对不碰按钮、复选框、下拉框
         function isValidInput(el){
             if(!el) return false;
             var tag = (el.tagName || '').toUpperCase();
@@ -245,23 +242,19 @@ class WebViewActivity : AppCompatActivity() {
         }
 
         function setVal(el, v){
-            if (document.activeElement === el) return; // 用户正在打字时不覆盖
-            
-            // 解决约克离心机 el-input-number 类型校验失败问题：智能强转为 Number
+            // 聚焦时也强制赋值，避免点击后停滞
             var numericV = Number(v);
             var finalV = isNaN(numericV) ? v : numericV;
 
-            // 1. 深度注入 Vue 组件体系
+            // 深度注入 Vue 组件体系
             try {
                 var p = el;
                 while (p && !p.__vue__) { p = p.parentElement; }
                 if (p && p.__vue__) {
                     var comp = p.__vue__;
-                    // 【注意】已彻底移除修改 precision/max/min 的逻辑，防止破坏 Vue 响应式引发英文 Locale 崩溃
                     if(comp.hasOwnProperty('value')) comp.value = finalV;
                     if(typeof comp.setCurrentValue === 'function') comp.setCurrentValue(finalV);
                     if(typeof comp.handleInput === 'function') comp.handleInput(finalV);
-                    
                     if(comp.${'$'}emit){
                         comp.${'$'}emit('input', finalV);
                         comp.${'$'}emit('change', finalV);
@@ -269,12 +262,11 @@ class WebViewActivity : AppCompatActivity() {
                 }
             } catch(e){}
 
-            // 2. 原生 HTML5 赋值
+            // 原生赋值（使用 finalV 保持类型一致）
             try {
-                el.removeAttribute('maxlength');
                 var proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
                 var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
-                if(setter){ setter.call(el, v); } else { el.value = v; }
+                if(setter){ setter.call(el, finalV); } else { el.value = finalV; }
                 
                 window.__ocr_bypass_rounding = true;
                 el.dispatchEvent(new Event('focus', {bubbles:true}));
@@ -283,8 +275,6 @@ class WebViewActivity : AppCompatActivity() {
                 el.dispatchEvent(new Event('blur', {bubbles:true}));
                 window.__ocr_bypass_rounding = false;
             } catch(e){}
-
-            // 标记已填值，用于比对防 Vue 还原
             el.setAttribute('data-ocr-filled', v);
         }
 
@@ -295,39 +285,34 @@ class WebViewActivity : AppCompatActivity() {
                 var item = data[i];
                 var el = findInput(item);
                 if(el){
-                    // 彻底解决【点击表单/切标签页后不填】的问题
-                    // 实时比对：如果 DOM 真实值被 Vue 刷掉了，或者根本没填，强制复写！
-                    var currentDomVal = el.value;
-                    var needsFill = (currentDomVal !== item.v && currentDomVal !== String(Number(item.v)));
-                    
+                    var needsFill = (el.value !== item.v && el.value !== String(Number(item.v)));
                     if(needsFill){
-                        if (document.activeElement !== el) { 
-                            setVal(el, item.v); 
-                        }
+                        setVal(el, item.v);
                     }
-                    
-                    // 校验是否真确填入
-                    var updatedDomVal = el.value;
-                    if(updatedDomVal === item.v || updatedDomVal === String(Number(item.v)) || el.getAttribute('data-ocr-filled') === item.v){ 
-                        currentFilled++; 
+                    if(el.value === item.v || el.value === String(Number(item.v)) || el.getAttribute('data-ocr-filled') === item.v){
+                        currentFilled++;
                     }
                 }
             }
-            
-            // 泵、阀门复选框快速通道（已移除 colonial 拼写错误导致的异常选择器）
         """)
-        
+
+        // 泵/阀门复选框，严格过滤全选/表头元素
         for (pid in pumpIds) {
             sb.append("""
             var chk=document.getElementById('${pid.esc()}')||document.querySelector('[value="${pid.esc()}"],[name="${pid.esc()}"]');
             if(chk && chk.type==='checkbox' && chk.offsetWidth > 0){
-                if(chk.getAttribute('data-ocr-filled') !== 'true'){
-                    var cs=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'checked');
-                    if(cs&&cs.set){cs.set.call(chk,true);}else{chk.checked=true;}
-                    chk.dispatchEvent(new Event('change',{bubbles:true}));
-                    chk.setAttribute('data-ocr-filled', 'true');
+                // 跳过表头、全选/反选按钮
+                if(!chk.closest('thead') && !chk.closest('.el-table__header') && 
+                   chk.id.indexOf('select-all')===-1 && chk.className.indexOf('select-all')===-1 &&
+                   chk.id.indexOf('check-all')===-1 && chk.className.indexOf('check-all')===-1){
+                    if(chk.getAttribute('data-ocr-filled') !== 'true'){
+                        var cs=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'checked');
+                        if(cs&&cs.set){cs.set.call(chk,true);}else{chk.checked=true;}
+                        chk.dispatchEvent(new Event('change',{bubbles:true}));
+                        chk.setAttribute('data-ocr-filled', 'true');
+                    }
+                    currentFilled++;
                 }
-                currentFilled++;
             }
             """)
         }
