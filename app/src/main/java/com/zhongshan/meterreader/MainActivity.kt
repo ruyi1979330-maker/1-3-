@@ -49,8 +49,11 @@ class MainActivity : AppCompatActivity() {
         if (success && pendingCameraUri != null && !isProcessing) {
             lifecycleScope.launch {
                 setProcessing(true)
-                processImageSuspend(pendingCameraUri!!, ImageSource.CAMERA)
-                setProcessing(false)
+                try {
+                    processImageSuspend(pendingCameraUri!!, ImageSource.CAMERA)
+                } finally {
+                    setProcessing(false)
+                }
             }
         }
     }
@@ -73,8 +76,11 @@ class MainActivity : AppCompatActivity() {
             if (resultUri != null) {
                 lifecycleScope.launch {
                     setProcessing(true)
-                    processImageSuspend(resultUri, ImageSource.GALLERY)
-                    setProcessing(false)
+                    try {
+                        processImageSuspend(resultUri, ImageSource.GALLERY)
+                    } finally {
+                        setProcessing(false)
+                    }
                 }
             }
         } else if (result.resultCode == UCrop.RESULT_ERROR) {
@@ -262,13 +268,14 @@ class MainActivity : AppCompatActivity() {
     private fun startUcrop(sourceUri: Uri) {
         val fileName = "crop_${System.currentTimeMillis()}.jpg"
         val destFile = File(cacheDir, fileName)
-        val destUri = FileProvider.getUriForFile(this, "$packageName.fileprovider", destFile)
+        
+        // 核心修复：UCrop 的输出地址必须是 file:// 格式的 Uri
+        val destUri = Uri.fromFile(destFile)
 
         val options = UCrop.Options()
         options.setCompressionFormat(android.graphics.Bitmap.CompressFormat.JPEG)
         options.setCompressionQuality(90)
         options.setHideBottomControls(false)
-        // 不再显式设置 AspectRatioOptions，直接通过 withAspectRatio 锁定比例
 
         val uCropIntent = UCrop.of(sourceUri, destUri)
             .withAspectRatio(4f, 3f)
