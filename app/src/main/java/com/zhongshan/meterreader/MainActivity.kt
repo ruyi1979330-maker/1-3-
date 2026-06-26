@@ -49,11 +49,8 @@ class MainActivity : AppCompatActivity() {
         if (success && pendingCameraUri != null && !isProcessing) {
             lifecycleScope.launch {
                 setProcessing(true)
-                try {
-                    processImageSuspend(pendingCameraUri!!, ImageSource.CAMERA)
-                } finally {
-                    setProcessing(false)
-                }
+                processImageSuspend(pendingCameraUri!!, ImageSource.CAMERA)
+                setProcessing(false)
             }
         }
     }
@@ -76,11 +73,8 @@ class MainActivity : AppCompatActivity() {
             if (resultUri != null) {
                 lifecycleScope.launch {
                     setProcessing(true)
-                    try {
-                        processImageSuspend(resultUri, ImageSource.GALLERY)
-                    } finally {
-                        setProcessing(false)
-                    }
+                    processImageSuspend(resultUri, ImageSource.GALLERY)
+                    setProcessing(false)
                 }
             }
         } else if (result.resultCode == UCrop.RESULT_ERROR) {
@@ -198,14 +192,16 @@ class MainActivity : AppCompatActivity() {
                     return@launch
                 }
 
-                val finalData = HashMap(cachedData)
+                // ★ 修复：预设值先放入，OCR 数据后放入，保证真实读数不被覆盖
+                val finalData = HashMap<String, String>()
                 finalData.putAll(PresetManager.getPresetsForMachine(template.machineId))
+                finalData.putAll(cachedData)   // OCR 值覆盖可能的同名预设
 
                 fun getValueByRawId(data: Map<String, String>, rawId: String): String? {
                     return data.entries.find { it.key.startsWith("$rawId|") || it.key == rawId }?.value
                 }
 
-                // 约克电流换算：电流 = 导叶开度/滑阀位置 × 2.5（取整）
+                // 电流换算基于 OCR 识别值（导叶开度/滑阀位置）
                 when (template.machineId) {
                     "cent_1" -> {
                         val loadPct = getValueByRawId(finalData, "field_1_82")?.toFloatOrNull()
@@ -268,9 +264,7 @@ class MainActivity : AppCompatActivity() {
     private fun startUcrop(sourceUri: Uri) {
         val fileName = "crop_${System.currentTimeMillis()}.jpg"
         val destFile = File(cacheDir, fileName)
-        
-        // 核心修复：UCrop 的输出地址必须是 file:// 格式的 Uri
-        val destUri = Uri.fromFile(destFile)
+        val destUri = FileProvider.getUriForFile(this, "$packageName.fileprovider", destFile)
 
         val options = UCrop.Options()
         options.setCompressionFormat(android.graphics.Bitmap.CompressFormat.JPEG)
