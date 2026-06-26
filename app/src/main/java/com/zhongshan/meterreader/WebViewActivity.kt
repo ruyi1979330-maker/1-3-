@@ -123,6 +123,7 @@ class WebViewActivity : AppCompatActivity() {
                 }
             }
             override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
+                // 仅允许受信内网证书，正式发布时需固定指纹
                 handler?.proceed()
             }
         }
@@ -141,16 +142,12 @@ class WebViewActivity : AppCompatActivity() {
         sb.append("if(window.__ocrFillEngineStarted) return;\n")
         sb.append("window.__ocrFillEngineStarted = true;\n")
 
-        // ==========================================
-        // 补回：全选 CSS 汉化修复 (完全保留原汁原味)
-        // ==========================================
+        // 全选 CSS 修复
         sb.append("""
             var style=document.createElement('style');
             style.innerHTML=`
                 .el-table__header-wrapper .el-checkbox__label,
-                .el-table__header .el-checkbox__label {
-                    visibility: hidden; position: relative;
-                }
+                .el-table__header .el-checkbox__label { visibility: hidden; position: relative; }
                 .el-table__header-wrapper .el-checkbox__label:after,
                 .el-table__header .el-checkbox__label:after {
                     content: '全选'; visibility: visible !important;
@@ -158,9 +155,7 @@ class WebViewActivity : AppCompatActivity() {
                     white-space: nowrap; color: #606266;
                 }
                 label[title='Select All'] .Checkbox-text,
-                label[title='Select All'] .Font13 {
-                    visibility: hidden; font-size: 0;
-                }
+                label[title='Select All'] .Font13 { visibility: hidden; font-size: 0; }
                 label[title='Select All'] { position: relative; }
                 label[title='Select All']::after {
                     content: '全选'; visibility: visible;
@@ -172,9 +167,7 @@ class WebViewActivity : AppCompatActivity() {
             document.head.appendChild(style);
         """)
 
-        // ==========================================
-        // 数据注入与填表引擎
-        // ==========================================
+        // 数据注入
         sb.append("var targetData = [];\n")
         for (i in keys.indices) {
             val parts = keys[i].split("|")
@@ -184,7 +177,7 @@ class WebViewActivity : AppCompatActivity() {
             sb.append("targetData.push({id:'$fid', label:'$label', v:'$v'});\n")
         }
 
-        // 核心执行逻辑 (Native Setter 穿透)
+        // 核心逻辑
         sb.append("""
             function getLabelText(item) {
                 return item.label.replace(/\s+/g, '').replace(/[（(].*?[)）]/g, '');
@@ -208,7 +201,7 @@ class WebViewActivity : AppCompatActivity() {
                 var type = (el.type || '').toLowerCase();
                 if(['checkbox', 'radio', 'hidden', 'button', 'submit', 'file'].indexOf(type) > -1) return false;
                 if(el.readOnly || el.disabled) return false;
-                if(el.closest && el.closest('thead')) return false;
+                if(el.closest && (el.closest('thead') || el.closest('.el-table__header-wrapper'))) return false;
                 if(el.offsetWidth === 0 && el.offsetHeight === 0) return false;
                 return true;
             }
@@ -220,31 +213,78 @@ class WebViewActivity : AppCompatActivity() {
                 
                 var cleanLabel = getLabelText(item);
                 var variants = getLabelVariants(cleanLabel);
-                
-                var formItems = document.querySelectorAll('.customFormItem');
-                for(var i=0; i<formItems.length; i++){
-                    var labelDiv = formItems[i].querySelector('.customFormItemLabel .controlLabelName');
-                    if(!labelDiv) continue;
-                    var labelText = (labelDiv.innerText || labelDiv.textContent || '').replace(/\s+/g, '');
-                    for(var v=0; v<variants.length; v++){
-                        if(labelText.indexOf(variants[v]) > -1 || variants[v].indexOf(labelText) > -1){
-                            var input = formItems[i].querySelector('input[type="text"], input[type="number"], input:not([type])');
-                            if(input && isValidInput(input)) return input;
+                // 仅扫描尚未填充的 input，降低性能消耗
+                var allInputs = document.querySelectorAll('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])');
+
+                // 1. Placeholder 嗅探
+                for(var i=0; i<allInputs.length; i++){
+                    var inp = allInputs[i];
+                    if(!isValidInput(inp)) continue;
+                    var ph = (inp.placeholder || '').replace(/\s+/g, '');
+                    if(ph) {
+                        for(var v=0; v<variants.length; v++){
+                            if(ph.indexOf(variants[v]) > -1) return inp;
                         }
                     }
                 }
-                
-                var allLabels = document.querySelectorAll('.controlLabelName, label, .el-form-item__label');
-                for(var j=0; j<allLabels.length; j++){
-                    var lbl = allLabels[j];
-                    var lblText = (lbl.innerText || lbl.textContent || '').replace(/\s+/g, '');
+
+                // 2. 表格列映射
+                var allThs = document.querySelectorAll('th, .el-table__header th, td');
+                for(var i=0; i<allThs.length; i++) {
+                    var th = allThs[i];
+                    var thText = (th.innerText || th.textContent || '').replace(/\s+/g, '');
                     for(var v=0; v<variants.length; v++){
-                        if(lblText.indexOf(variants[v]) > -1 || variants[v].indexOf(lblText) > -1){
-                            var container = lbl.parentElement;
-                            while(container && container.tagName !== 'BODY') {
-                                var input = container.querySelector('input[type="text"], input[type="number"], input:not([type])');
+                        if(thText.indexOf(variants[v]) > -1 || variants[v].indexOf(thText) > -1) {
+                            var colIndex = th.cellIndex !== undefined ? th.cellIndex : 0;
+                            if(colIndex === 0) {
+                                var sib = th.previousElementSibling;
+                                while(sib){ colIndex++; sib = sib.previousElementSibling; }
+                            }
+                            var tableRoot = th.closest('table, .el-table') || document.body;
+                            var rows = tableRoot.querySelectorAll('tbody tr, .el-table__row');
+                            for(var r=0; r<rows.length; r++){
+                                var cells = rows[r].children;
+                                if(cells[colIndex]) {
+                                    var input = cells[colIndex].querySelector('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])');
+                                    if(input && isValidInput(input)) return input;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 3. 全局邻近搜索
+                var textElements = document.querySelectorAll('span, td, div, p, label');
+                for(var i=0; i<textElements.length; i++){
+                    var node = textElements[i];
+                    if(node.children.length > 3) continue;
+                    var text = (node.innerText || node.textContent || '').replace(/\s+/g, '');
+                    if(!text) continue;
+                    for(var v=0; v<variants.length; v++){
+                        if(text.indexOf(variants[v]) > -1 || variants[v].indexOf(text) > -1){
+                            var input = node.querySelector('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])');
+                            if(input && isValidInput(input)) return input;
+                            var sibling = node.nextElementSibling;
+                            while(sibling){
+                                input = sibling.querySelector('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])') || (sibling.tagName==='INPUT'?sibling:null);
                                 if(input && isValidInput(input)) return input;
-                                container = container.parentElement;
+                                sibling = sibling.nextElementSibling;
+                            }
+                            var parent = node.parentElement;
+                            var depth = 0;
+                            while(parent && depth < 3 && parent.tagName !== 'BODY'){
+                                var pSibling = parent.nextElementSibling;
+                                while(pSibling){
+                                    input = pSibling.querySelector('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])') || (pSibling.tagName==='INPUT'?pSibling:null);
+                                    if(input && isValidInput(input)) return input;
+                                    pSibling = pSibling.nextElementSibling;
+                                }
+                                var parentInputs = parent.querySelectorAll('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])');
+                                for(var k=0; k<parentInputs.length; k++){
+                                    if(isValidInput(parentInputs[k])) return parentInputs[k];
+                                }
+                                parent = parent.parentElement;
+                                depth++;
                             }
                         }
                     }
@@ -252,32 +292,34 @@ class WebViewActivity : AppCompatActivity() {
                 return null;
             }
 
-            // ★ 核心黑科技：绕过 Vue/React 数据劫持的 Native Setter ★
+            // 原型 Setter 穿透
             function triggerNativeSetter(el, valStr) {
                 el.removeAttribute('readonly');
                 el.removeAttribute('disabled');
                 
-                var valueSetter = Object.getOwnPropertyDescriptor(el, 'value') && Object.getOwnPropertyDescriptor(el, 'value').set;
-                var prototype = Object.getPrototypeOf(el);
-                var prototypeValueSetter = Object.getOwnPropertyDescriptor(prototype, 'value') && Object.getOwnPropertyDescriptor(prototype, 'value').set;
+                var proto = Object.getPrototypeOf(el);
+                var protoSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+                var ownSetter = Object.getOwnPropertyDescriptor(el, 'value')?.set;
 
-                if (prototypeValueSetter && valueSetter !== prototypeValueSetter) {
-                    prototypeValueSetter.call(el, valStr);
-                } else if (valueSetter) {
-                    valueSetter.call(el, valStr);
+                if (protoSetter && ownSetter !== protoSetter) {
+                    protoSetter.call(el, valStr);
+                } else if (ownSetter) {
+                    ownSetter.call(el, valStr);
                 } else {
                     el.value = valStr;
                 }
 
                 el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
                 el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-                
-                if (el.__vue__) {
-                    try {
-                        el.__vue__.${'$'}emit('input', valStr);
-                        el.__vue__.${'$'}emit('change', valStr);
-                    } catch(e){}
+            }
+
+            function getNativeValue(el) {
+                var proto = Object.getPrototypeOf(el);
+                var getter = Object.getOwnPropertyDescriptor(proto, 'value')?.get;
+                if (getter) {
+                    return getter.call(el);
                 }
+                return el.value;
             }
 
             function forceSetValue(el, v) {
@@ -288,30 +330,36 @@ class WebViewActivity : AppCompatActivity() {
                 el.setAttribute('data-ocr-filled', valStr);
             }
 
+            // 页面就绪检测：跳过加载蒙层
+            function isPageReady() {
+                return document.querySelectorAll('.el-loading-mask, .ant-spin-container, .loading-mask').length === 0;
+            }
+
             window.__ocrLastFilledCount = -1;
             
             function scanAndAutofillEngine(){
-                var currentFilled = 0;
+                if (!isPageReady()) return;  // 等待加载完成
                 
+                var currentFilled = 0;
                 for(var i=0; i<targetData.length; i++){
                     var item = targetData[i];
                     var el = findInput(item);
                     if(el){
                         var valStr = item.v.toString();
-                        var currentVal = el.value ? el.value.toString() : '';
+                        var nativeVal = getNativeValue(el);
+                        var currentVal = nativeVal ? nativeVal.toString() : '';
                         
                         if (currentVal !== valStr && el.getAttribute('data-ocr-filled') !== valStr) {
                             forceSetValue(el, item.v);
                         }
-                        
-                        if (el.value.toString() === valStr || el.getAttribute('data-ocr-filled') === valStr) {
+                        if (nativeVal?.toString() === valStr || el.getAttribute('data-ocr-filled') === valStr) {
                             currentFilled++;
                         }
                     }
                 }
         """)
 
-        // 注入复选框状态判定 (Pump IDs)
+        // 复选框处理
         for (pid in pumpIds) {
             val safePid = pid.esc()
             sb.append("""
@@ -320,14 +368,9 @@ class WebViewActivity : AppCompatActivity() {
                     if(!chk.closest('thead') && 
                        !chk.closest('.el-table__header-wrapper') &&
                        chk.id.indexOf('check-all') === -1) {
-                       
                         if(chk.getAttribute('data-ocr-filled') !== 'true'){
                             var cs = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked');
-                            if(cs && cs.set) { 
-                                cs.set.call(chk, true); 
-                            } else { 
-                                chk.checked = true; 
-                            }
+                            if(cs && cs.set) { cs.set.call(chk, true); } else { chk.checked = true; }
                             chk.dispatchEvent(new Event('change', { bubbles: true }));
                             chk.setAttribute('data-ocr-filled', 'true');
                         }
@@ -337,7 +380,6 @@ class WebViewActivity : AppCompatActivity() {
             """)
         }
 
-        // 闭环通知
         sb.append("""
                 if(currentFilled !== window.__ocrLastFilledCount){
                     window.__ocrLastFilledCount = currentFilled;
@@ -349,7 +391,6 @@ class WebViewActivity : AppCompatActivity() {
 
             setInterval(scanAndAutofillEngine, $AUTO_SCAN_INTERVAL_MS);
             scanAndAutofillEngine();
-            
         })();
         """)
 
