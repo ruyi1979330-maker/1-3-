@@ -10,7 +10,6 @@ import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -33,10 +32,9 @@ class MainActivity : AppCompatActivity() {
     private var currentScreenIndex = 0
     private var pendingCameraUri: Uri? = null
     private var pendingPhotoFileName: String? = null
-
     private var isProcessing = false
 
-    // ---------- 相机权限 ----------
+    // 相机权限
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -44,7 +42,7 @@ class MainActivity : AppCompatActivity() {
         else Toast.makeText(this, "需授予相机权限", Toast.LENGTH_SHORT).show()
     }
 
-    // ---------- 拍照 ----------
+    // 拍照
     private val cameraLauncher = registerForActivityResult(
         ActivityResultContracts.TakePicture()
     ) { success ->
@@ -57,7 +55,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- 相册（单张选择，然后裁剪） ----------
+    // 从相册选择单张图片
     private val galleryPickLauncher = registerForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
@@ -66,7 +64,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- uCrop 裁剪结果 ----------
+    // uCrop 裁剪结果
     private val uCropLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -165,7 +163,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // ---------- 图库按钮：选择图片后裁剪 ----------
+        // 图库按钮：选择图片后裁剪
         binding.btnGallery.setOnClickListener {
             if (!isProcessing) {
                 galleryPickLauncher.launch("image/*")
@@ -181,7 +179,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // ---------- 推送与换算逻辑（修正电流公式） ----------
+        // 推送与换算逻辑（修正电流公式）
         binding.btnTransferAndFill.setOnClickListener {
             val template = selectedTemplate ?: return@setOnClickListener
             lifecycleScope.launch {
@@ -206,8 +204,7 @@ class MainActivity : AppCompatActivity() {
                     "cent_1" -> {
                         val loadPct = getValueByRawId(finalData, "field_1_82")?.toFloatOrNull()
                         if (loadPct != null) {
-                            val current = (loadPct * 2.5f).roundToInt()
-                            finalData["field_1_85"] = current.toString()
+                            finalData["field_1_85"] = (loadPct * 2.5f).roundToInt().toString()
                         }
                     }
                     "screw_3_1" -> {
@@ -262,7 +259,6 @@ class MainActivity : AppCompatActivity() {
         cameraLauncher.launch(pendingCameraUri!!)
     }
 
-    // ---------- 启动uCrop裁剪 ----------
     private fun startUcrop(sourceUri: Uri) {
         val fileName = "crop_${System.currentTimeMillis()}.jpg"
         val destFile = File(cacheDir, fileName)
@@ -271,9 +267,8 @@ class MainActivity : AppCompatActivity() {
         val options = UCrop.Options()
         options.setCompressionFormat(android.graphics.Bitmap.CompressFormat.JPEG)
         options.setCompressionQuality(90)
-        options.setAspectRatioOptions(1, UCrop.AspectRatioOptions("4:3", 4f, 3f))
         options.setHideBottomControls(false)
-        options.setFreeStyleCropEnabled(false)
+        // 不再显式设置 AspectRatioOptions，直接通过 withAspectRatio 锁定比例
 
         val uCropIntent = UCrop.of(sourceUri, destUri)
             .withAspectRatio(4f, 3f)
@@ -283,7 +278,6 @@ class MainActivity : AppCompatActivity() {
         uCropLauncher.launch(uCropIntent)
     }
 
-    // ---------- 统一识别入口（根据source分流） ----------
     private suspend fun processImageSuspend(uri: Uri, source: ImageSource) {
         val template = selectedTemplate ?: return
         val result = OCRFacade.performSmartOcr(
