@@ -136,7 +136,6 @@ class WebViewActivity : AppCompatActivity() {
         sb.append("if(window.__ocrFillEngineStarted) return;")
         sb.append("window.__ocrFillEngineStarted = true;")
 
-        // 去除 toFixed 钩子可能引发的英文 locale 切换
         sb.append("""
             if(!window.__toFixedHooked){
                 window.__toFixedHooked = true;
@@ -163,7 +162,6 @@ class WebViewActivity : AppCompatActivity() {
             if(el && isValidInput(el)) return el;
             if(!item.label) return null;
 
-            // 清洗干扰字符
             var cleanLabel = item.label.replace(/\s+/g, '').replace(/（预设值）|\(预设值\)|（.*?）|\(.*?\)/g, '');
             
             var machinePrefix = null;
@@ -174,7 +172,6 @@ class WebViewActivity : AppCompatActivity() {
                 coreMetric = cleanLabel.replace(matchPrefix[0], '');
             }
 
-            // 策略 A：表格动态匹配
             if(machinePrefix){
                 var tables = document.querySelectorAll('table, .el-table');
                 for(var t=0; t<tables.length; t++){
@@ -209,7 +206,6 @@ class WebViewActivity : AppCompatActivity() {
                 }
             }
 
-            // 策略 B：扁平化兜底
             var allNodes = document.querySelectorAll('*');
             for(var i=0; i<allNodes.length; i++){
                 var node = allNodes[i];
@@ -242,11 +238,15 @@ class WebViewActivity : AppCompatActivity() {
         }
 
         function setVal(el, v){
-            // 聚焦时也强制赋值，避免点击后停滞
+            // ★ 核心修复：若当前元素处于焦点，强制失焦，否则 Vue 组件会拒绝程序化赋值
+            if(document.activeElement === el){
+                el.blur();
+            }
+
             var numericV = Number(v);
             var finalV = isNaN(numericV) ? v : numericV;
 
-            // 深度注入 Vue 组件体系
+            // 深度注入 Vue 组件
             try {
                 var p = el;
                 while (p && !p.__vue__) { p = p.parentElement; }
@@ -262,7 +262,7 @@ class WebViewActivity : AppCompatActivity() {
                 }
             } catch(e){}
 
-            // 原生赋值（使用 finalV 保持类型一致）
+            // 原生赋值
             try {
                 var proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
                 var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
@@ -296,15 +296,21 @@ class WebViewActivity : AppCompatActivity() {
             }
         """)
 
-        // 泵/阀门复选框，严格过滤全选/表头元素
+        // 泵/阀门复选框：绝对避免全选按钮
         for (pid in pumpIds) {
             sb.append("""
             var chk=document.getElementById('${pid.esc()}')||document.querySelector('[value="${pid.esc()}"],[name="${pid.esc()}"]');
             if(chk && chk.type==='checkbox' && chk.offsetWidth > 0){
-                // 跳过表头、全选/反选按钮
-                if(!chk.closest('thead') && !chk.closest('.el-table__header') && 
-                   chk.id.indexOf('select-all')===-1 && chk.className.indexOf('select-all')===-1 &&
-                   chk.id.indexOf('check-all')===-1 && chk.className.indexOf('check-all')===-1){
+                // 跳过表头、全选、半选状态、header-wrapper 中的任何复选框
+                if(!chk.closest('thead') && 
+                   !chk.closest('.el-table__header') &&
+                   !chk.closest('.el-table__header-wrapper') &&
+                   chk.getAttribute('is-indeterminate') === null &&
+                   chk.className.indexOf('el-table__header') === -1 &&
+                   chk.id.indexOf('select-all') === -1 && 
+                   chk.className.indexOf('select-all') === -1 &&
+                   chk.id.indexOf('check-all') === -1 && 
+                   chk.className.indexOf('check-all') === -1){
                     if(chk.getAttribute('data-ocr-filled') !== 'true'){
                         var cs=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'checked');
                         if(cs&&cs.set){cs.set.call(chk,true);}else{chk.checked=true;}
