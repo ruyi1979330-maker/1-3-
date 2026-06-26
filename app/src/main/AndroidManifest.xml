@@ -21,17 +21,23 @@
             </intent-filter>
         </activity>
 
-        <activity android:name=".WebViewActivity" android:screenOrientation="portrait" />
-        
-        <activity 
-            android:name=".PresetSettingsActivity" 
+        <activity
+            android:name=".WebViewActivity"
+            android:screenOrientation="portrait" />
+
+        <activity
+            android:name=".PresetSettingsActivity"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.MeterReader.NoActionBar" />
 
-        <!-- 【关键新增】：添加定标器配置页面的注册 -->
-        <activity 
-            android:name=".RoiConfigActivity" 
+        <activity
+            android:name=".RoiConfigActivity"
             android:screenOrientation="portrait" />
+
+        <!-- ===== 新增：uCrop 裁剪 Activity ===== -->
+        <activity
+            android:name="com.yalantis.ucrop.UCropActivity"
+            android:theme="@style/Theme.MeterReader.NoActionBar" />
 
         <provider
             android:name="androidx.core.content.FileProvider"
