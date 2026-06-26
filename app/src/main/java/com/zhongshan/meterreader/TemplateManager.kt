@@ -2,20 +2,12 @@ package com.zhongshan.meterreader
 
 import com.zhongshan.meterreader.data.DeviceTemplate
 
-/**
- * TemplateManager — 精简版
- *
- * 移除了 ScreenTemplate / OcrField / RoiRegion（已被 DeviceOcrStrategy 取代）。
- * 只保留：设备列表、表单 URL、板交关键字映射、Tab 名称。
- */
 object TemplateManager {
 
     private const val URL_ROOM_1 = "https://appflow.zs-hospital.sh.cn/public/form/dae1b4dba6f94b2bb9ed1d2f4d33b0bc"
     private const val URL_ROOM_3 = "https://appflow.zs-hospital.sh.cn/public/form/1efd9996ea034ce2b2bc792551c4c6b5"
 
-    // =====================================================================
-    // 板交关键字映射（关键字按长度降序，防止短词误匹配）
-    // =====================================================================
+    // 板交关键字映射
     private val plateMaps = mapOf(
         1 to mapOf(
             "1号板交"    to "bj1_0",
@@ -45,9 +37,7 @@ object TemplateManager {
     fun getPlateKeywordMap(roomId: Int): Map<String, String> =
         plateMaps[roomId] ?: emptyMap()
 
-    // =====================================================================
-    // 设备列表（不再包含 screens/ROI 信息）
-    // =====================================================================
+    // 设备列表
     val allTemplates = listOf(
         DeviceTemplate("1号机房 特灵螺杆1#", "screw_1",   1, URL_ROOM_1, pumpFieldIds = listOf("pump_7", "pump_8")),
         DeviceTemplate("1号机房 特灵螺杆2#", "screw_2",   1, URL_ROOM_1, pumpFieldIds = listOf("pump_5", "pump_6")),
