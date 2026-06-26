@@ -34,7 +34,6 @@ class MainActivity : AppCompatActivity() {
     private var pendingPhotoFileName: String? = null
     private var isProcessing = false
 
-    // 相机权限
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -42,7 +41,6 @@ class MainActivity : AppCompatActivity() {
         else Toast.makeText(this, "需授予相机权限", Toast.LENGTH_SHORT).show()
     }
 
-    // 拍照
     private val cameraLauncher = registerForActivityResult(
         ActivityResultContracts.TakePicture()
     ) { success ->
@@ -55,7 +53,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 从相册选择单张图片
     private val galleryPickLauncher = registerForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
@@ -64,7 +61,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // uCrop 裁剪结果
     private val uCropLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -163,7 +159,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 图库按钮：选择图片后裁剪
         binding.btnGallery.setOnClickListener {
             if (!isProcessing) {
                 galleryPickLauncher.launch("image/*")
@@ -179,7 +174,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 推送与换算逻辑（修正电流公式 + 预设值不覆盖 OCR）
         binding.btnTransferAndFill.setOnClickListener {
             val template = selectedTemplate ?: return@setOnClickListener
             lifecycleScope.launch {
@@ -192,31 +186,36 @@ class MainActivity : AppCompatActivity() {
                     return@launch
                 }
 
-                // ★ 先放预设值，再放 OCR 识别值，保证真实读数不被覆盖
                 val finalData = HashMap<String, String>()
                 finalData.putAll(PresetManager.getPresetsForMachine(template.machineId))
-                finalData.putAll(cachedData)
+                finalData.putAll(cachedData)   // OCR 真实值覆盖预设
 
                 fun getValueByRawId(data: Map<String, String>, rawId: String): String? {
                     return data.entries.find { it.key.startsWith("$rawId|") || it.key == rawId }?.value
                 }
 
-                // 电流换算，使用带 label 的键，确保 JS 能找到输入框
+                // ★ 电流计算：提取纯数字（去除 % 等符号）
                 when (template.machineId) {
                     "cent_1" -> {
-                        val loadPct = getValueByRawId(finalData, "field_1_82")?.toFloatOrNull()
+                        val raw = getValueByRawId(finalData, "field_1_82")
+                        val clean = raw?.replace(Regex("[^0-9.]"), "")
+                        val loadPct = clean?.toFloatOrNull()
                         if (loadPct != null) {
                             finalData["field_1_85|电机电流"] = (loadPct * 2.5f).roundToInt().toString()
                         }
                     }
                     "screw_3_1" -> {
-                        val loadPct = getValueByRawId(finalData, "field_3_17")?.toFloatOrNull()
+                        val raw = getValueByRawId(finalData, "field_3_17")
+                        val clean = raw?.replace(Regex("[^0-9.]"), "")
+                        val loadPct = clean?.toFloatOrNull()
                         if (loadPct != null) {
                             finalData["field_3_20|电机电流"] = (loadPct * 2.5f).roundToInt().toString()
                         }
                     }
                     "screw_3_2" -> {
-                        val loadPct = getValueByRawId(finalData, "field_3_47")?.toFloatOrNull()
+                        val raw = getValueByRawId(finalData, "field_3_47")
+                        val clean = raw?.replace(Regex("[^0-9.]"), "")
+                        val loadPct = clean?.toFloatOrNull()
                         if (loadPct != null) {
                             finalData["field_3_50|电机电流"] = (loadPct * 2.5f).roundToInt().toString()
                         }
