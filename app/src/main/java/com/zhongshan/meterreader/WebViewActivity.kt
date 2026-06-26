@@ -58,9 +58,9 @@ class WebViewActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        if (BuildConfig.DEBUG) {
-            WebView.setWebContentsDebuggingEnabled(true)
-        }
+        // 允许 Chrome 远程调试 WebView（发布时请移除或加条件判断）
+        @Suppress("DEPRECATION")
+        WebView.setWebContentsDebuggingEnabled(true)
 
         binding = ActivityWebviewBinding.inflate(layoutInflater)
         setContentView(binding.root)
