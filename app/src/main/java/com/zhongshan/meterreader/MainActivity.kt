@@ -179,7 +179,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 推送与换算逻辑（修正电流公式）
+        // 推送与换算逻辑（修正电流公式 + 预设值不覆盖 OCR）
         binding.btnTransferAndFill.setOnClickListener {
             val template = selectedTemplate ?: return@setOnClickListener
             lifecycleScope.launch {
@@ -192,33 +192,33 @@ class MainActivity : AppCompatActivity() {
                     return@launch
                 }
 
-                // ★ 修复：预设值先放入，OCR 数据后放入，保证真实读数不被覆盖
+                // ★ 先放预设值，再放 OCR 识别值，保证真实读数不被覆盖
                 val finalData = HashMap<String, String>()
                 finalData.putAll(PresetManager.getPresetsForMachine(template.machineId))
-                finalData.putAll(cachedData)   // OCR 值覆盖可能的同名预设
+                finalData.putAll(cachedData)
 
                 fun getValueByRawId(data: Map<String, String>, rawId: String): String? {
                     return data.entries.find { it.key.startsWith("$rawId|") || it.key == rawId }?.value
                 }
 
-                // 电流换算基于 OCR 识别值（导叶开度/滑阀位置）
+                // 电流换算，使用带 label 的键，确保 JS 能找到输入框
                 when (template.machineId) {
                     "cent_1" -> {
                         val loadPct = getValueByRawId(finalData, "field_1_82")?.toFloatOrNull()
                         if (loadPct != null) {
-                            finalData["field_1_85"] = (loadPct * 2.5f).roundToInt().toString()
+                            finalData["field_1_85|电机电流"] = (loadPct * 2.5f).roundToInt().toString()
                         }
                     }
                     "screw_3_1" -> {
                         val loadPct = getValueByRawId(finalData, "field_3_17")?.toFloatOrNull()
                         if (loadPct != null) {
-                            finalData["field_3_20"] = (loadPct * 2.5f).roundToInt().toString()
+                            finalData["field_3_20|电机电流"] = (loadPct * 2.5f).roundToInt().toString()
                         }
                     }
                     "screw_3_2" -> {
                         val loadPct = getValueByRawId(finalData, "field_3_47")?.toFloatOrNull()
                         if (loadPct != null) {
-                            finalData["field_3_50"] = (loadPct * 2.5f).roundToInt().toString()
+                            finalData["field_3_50|电机电流"] = (loadPct * 2.5f).roundToInt().toString()
                         }
                     }
                 }
