@@ -31,7 +31,7 @@ class WebViewActivity : AppCompatActivity() {
     private val isFillDone          = AtomicBoolean(false)
 
     private fun String.esc() =
-        replace("\\","\\\\").replace("'","\\'").replace("\n","\\n").replace("\r","")
+        replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "")
 
     class SafeWebBridge(activity: WebViewActivity) {
         private val ref = WeakReference(activity)
@@ -58,7 +58,6 @@ class WebViewActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 允许 Chrome 远程调试 WebView（发布时请移除或加条件判断）
         @Suppress("DEPRECATION")
         WebView.setWebContentsDebuggingEnabled(true)
 
@@ -75,7 +74,7 @@ class WebViewActivity : AppCompatActivity() {
         if (targetUrl.isNotEmpty()) binding.webView.loadUrl(targetUrl)
     }
 
-    @SuppressLint("SetJavaScriptEnabled","WebViewClientOnReceivedSslError")
+    @SuppressLint("SetJavaScriptEnabled", "WebViewClientOnReceivedSslError")
     private fun initWebView() {
         binding.webView.settings.apply {
             javaScriptEnabled  = true
@@ -137,255 +136,223 @@ class WebViewActivity : AppCompatActivity() {
 
     private fun compileFillJs(keys: Array<String>, values: Array<String>, pumpIds: Array<String>): String {
         val sb = StringBuilder()
-        sb.append("(function(){")
-        sb.append("if(window.__ocrFillEngineStarted) return;")
-        sb.append("window.__ocrFillEngineStarted = true;")
+        
+        sb.append("(function(){\n")
+        sb.append("if(window.__ocrFillEngineStarted) return;\n")
+        sb.append("window.__ocrFillEngineStarted = true;\n")
 
-        // 全选按钮 CSS 修复（自定义 Checkbox + Element UI 兼容）
+        // ==========================================
+        // 补回：全选 CSS 汉化修复 (完全保留原汁原味)
+        // ==========================================
         sb.append("""
             var style=document.createElement('style');
             style.innerHTML=`
-                /* Element UI 全选 */
                 .el-table__header-wrapper .el-checkbox__label,
                 .el-table__header .el-checkbox__label {
-                    visibility: hidden;
-                    position: relative;
+                    visibility: hidden; position: relative;
                 }
                 .el-table__header-wrapper .el-checkbox__label:after,
                 .el-table__header .el-checkbox__label:after {
-                    content: '全选';
-                    visibility: visible !important;
-                    position: absolute;
-                    left: 0;
-                    top: 0;
-                    white-space: nowrap;
-                    color: #606266;
+                    content: '全选'; visibility: visible !important;
+                    position: absolute; left: 0; top: 0;
+                    white-space: nowrap; color: #606266;
                 }
-                /* 自定义 ming Checkbox 全选 */
                 label[title='Select All'] .Checkbox-text,
                 label[title='Select All'] .Font13 {
-                    visibility: hidden;
-                    font-size: 0;
+                    visibility: hidden; font-size: 0;
                 }
-                label[title='Select All'] {
-                    position: relative;
-                }
+                label[title='Select All'] { position: relative; }
                 label[title='Select All']::after {
-                    content: '全选';
-                    visibility: visible;
-                    position: absolute;
-                    left: 20px;
-                    top: 50%;
+                    content: '全选'; visibility: visible;
+                    position: absolute; left: 20px; top: 50%;
                     transform: translateY(-50%);
-                    white-space: nowrap;
-                    font-size: 13px;
-                    color: #606266;
+                    white-space: nowrap; font-size: 13px; color: #606266;
                 }
             `;
             document.head.appendChild(style);
         """)
 
-        sb.append("""
-            if(!window.__toFixedHooked){
-                window.__toFixedHooked = true;
-                var originalToFixed = Number.prototype.toFixed;
-                Number.prototype.toFixed = function(digits){
-                    if(window.__ocr_bypass_rounding){ return this.toString(); }
-                    return originalToFixed.apply(this, arguments);
-                };
-            }
-        """)
-
-        sb.append("var data=[];")
+        // ==========================================
+        // 数据注入与填表引擎
+        // ==========================================
+        sb.append("var targetData = [];\n")
         for (i in keys.indices) {
             val parts = keys[i].split("|")
             val fid   = parts[0].esc()
             val label = if (parts.size > 1) parts[1].esc() else ""
             val v     = values[i].esc()
-            sb.append("data.push({id:'$fid',label:'$label',v:'$v'});")
+            sb.append("targetData.push({id:'$fid', label:'$label', v:'$v'});\n")
         }
-        
+
+        // 核心执行逻辑 (Native Setter 穿透)
         sb.append("""
-        // 获取表单标签文本（去除空格和括号内容）
-        function getLabelText(item) {
-            return item.label.replace(/\s+/g, '').replace(/[（(].*?[)）]/g, '');
-        }
-        
-        // 生成标签变体（同义词）
-        function getLabelVariants(label) {
-            var variants = [label];
-            if(label.indexOf('进水') > -1) variants.push(label.replace('进水','进口'));
-            if(label.indexOf('进口') > -1) variants.push(label.replace('进口','进水'));
-            if(label.indexOf('出水') > -1) variants.push(label.replace('出水','出口'));
-            if(label.indexOf('出口') > -1) variants.push(label.replace('出口','出水'));
-            if(label.indexOf('返回') > -1) variants.push(label.replace('返回','回水'));
-            if(label.indexOf('回水') > -1) variants.push(label.replace('回水','返回'));
-            return variants;
-        }
-        
-        function findInput(item){
-            // 首先尝试 id/name
-            var el = document.getElementById(item.id) || document.querySelector('[name="'+item.id+'"]');
-            if(el && isValidInput(el)) return el;
-            
-            if(!item.label) return null;
-            
-            var cleanLabel = getLabelText(item);
-            var variants = getLabelVariants(cleanLabel);
-            
-            // 遍历自定义表单项 .customFormItem
-            var formItems = document.querySelectorAll('.customFormItem');
-            for(var i=0; i<formItems.length; i++){
-                var formItem = formItems[i];
-                var labelDiv = formItem.querySelector('.customFormItemLabel .controlLabelName');
-                if(!labelDiv) continue;
-                var labelText = (labelDiv.innerText || labelDiv.textContent || '').replace(/\s+/g, '');
-                
-                var matched = false;
-                for(var v=0; v<variants.length; v++){
-                    if(labelText.indexOf(variants[v]) > -1 || variants[v].indexOf(labelText) > -1){
-                        matched = true;
-                        break;
-                    }
-                }
-                
-                if(matched){
-                    var input = formItem.querySelector('input[type="text"], input[type="number"], input:not([type])');
-                    if(input && isValidInput(input)) return input;
-                }
+            function getLabelText(item) {
+                return item.label.replace(/\s+/g, '').replace(/[（(].*?[)）]/g, '');
             }
             
-            // 宽泛兜底：只根据标签文字查找
-            var allLabels = document.querySelectorAll('.controlLabelName');
-            for(var j=0; j<allLabels.length; j++){
-                var lbl = allLabels[j];
-                var lblText = (lbl.innerText || lbl.textContent || '').replace(/\s+/g, '');
-                var matched = false;
-                for(var v=0; v<variants.length; v++){
-                    if(lblText.indexOf(variants[v]) > -1 || variants[v].indexOf(lblText) > -1){
-                        matched = true;
-                        break;
-                    }
-                }
-                if(matched){
-                    var formItem = lbl.closest('.customFormItem');
-                    if(formItem){
-                        var input = formItem.querySelector('input[type="text"], input[type="number"], input:not([type])');
-                        if(input && isValidInput(input)) return input;
-                    }
-                }
+            function getLabelVariants(label) {
+                var variants = [label];
+                if(label.indexOf('进水') > -1) variants.push(label.replace('进水','进口'));
+                if(label.indexOf('进口') > -1) variants.push(label.replace('进口','进水'));
+                if(label.indexOf('出水') > -1) variants.push(label.replace('出水','出口'));
+                if(label.indexOf('出口') > -1) variants.push(label.replace('出口','出水'));
+                if(label.indexOf('返回') > -1) variants.push(label.replace('返回','回水'));
+                if(label.indexOf('回水') > -1) variants.push(label.replace('回水','返回'));
+                return variants;
             }
             
-            return null;
-        }
-
-        function isValidInput(el){
-            if(!el) return false;
-            var tag = (el.tagName || '').toUpperCase();
-            if(tag !== 'INPUT' && tag !== 'TEXTAREA') return false;
-            var type = (el.type || '').toLowerCase();
-            if(type === 'checkbox' || type === 'radio' || type === 'hidden' || type === 'button' || type === 'submit' || type === 'file') return false;
-            if(el.readOnly || el.disabled) return false;
-            if(el.closest && el.closest('thead')) return false;
-            if(el.offsetWidth === 0 || el.offsetHeight === 0) return false;
-            return true;
-        }
-
-        function setVal(el, v){
-            if(document.activeElement === el){
-                el.blur();
+            function isValidInput(el){
+                if(!el) return false;
+                var tag = (el.tagName || '').toUpperCase();
+                if(tag !== 'INPUT' && tag !== 'TEXTAREA') return false;
+                var type = (el.type || '').toLowerCase();
+                if(['checkbox', 'radio', 'hidden', 'button', 'submit', 'file'].indexOf(type) > -1) return false;
+                if(el.readOnly || el.disabled) return false;
+                if(el.closest && el.closest('thead')) return false;
+                if(el.offsetWidth === 0 && el.offsetHeight === 0) return false;
+                return true;
             }
 
-            var numericV = Number(v);
-            var finalV = isNaN(numericV) ? v : numericV;
-
-            try {
-                var p = el;
-                while (p && !p.__vue__) { p = p.parentElement; }
-                if (p && p.__vue__) {
-                    var comp = p.__vue__;
-                    if(comp.hasOwnProperty('value')) comp.value = finalV;
-                    if(typeof comp.setCurrentValue === 'function') comp.setCurrentValue(finalV);
-                    if(typeof comp.handleInput === 'function') comp.handleInput(finalV);
-                    if(comp.${'$'}emit){
-                        comp.${'$'}emit('input', finalV);
-                        comp.${'$'}emit('change', finalV);
+            function findInput(item){
+                var el = document.getElementById(item.id) || document.querySelector('[name="'+item.id+'"]');
+                if(el && isValidInput(el)) return el;
+                if(!item.label) return null;
+                
+                var cleanLabel = getLabelText(item);
+                var variants = getLabelVariants(cleanLabel);
+                
+                var formItems = document.querySelectorAll('.customFormItem');
+                for(var i=0; i<formItems.length; i++){
+                    var labelDiv = formItems[i].querySelector('.customFormItemLabel .controlLabelName');
+                    if(!labelDiv) continue;
+                    var labelText = (labelDiv.innerText || labelDiv.textContent || '').replace(/\s+/g, '');
+                    for(var v=0; v<variants.length; v++){
+                        if(labelText.indexOf(variants[v]) > -1 || variants[v].indexOf(labelText) > -1){
+                            var input = formItems[i].querySelector('input[type="text"], input[type="number"], input:not([type])');
+                            if(input && isValidInput(input)) return input;
+                        }
                     }
                 }
-            } catch(e){}
-
-            try {
-                var proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
-                var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
-                if(setter){ setter.call(el, finalV); } else { el.value = finalV; }
                 
-                window.__ocr_bypass_rounding = true;
-                el.dispatchEvent(new Event('focus', {bubbles:true}));
-                el.dispatchEvent(new Event('input', {bubbles: true}));
-                el.dispatchEvent(new Event('change', {bubbles: true}));
-                el.dispatchEvent(new Event('blur', {bubbles:true}));
-                window.__ocr_bypass_rounding = false;
-            } catch(e){}
-            el.setAttribute('data-ocr-filled', v);
-        }
-
-        window.__ocrLastFilledCount = -1;
-        function scanAndAutofillEngine(){
-            var currentFilled = 0;
-            for(var i=0; i<data.length; i++){
-                var item = data[i];
-                var el = findInput(item);
-                if(el){
-                    var needsFill = (el.value !== item.v && el.value !== String(Number(item.v)));
-                    if(needsFill){
-                        setVal(el, item.v);
+                var allLabels = document.querySelectorAll('.controlLabelName, label, .el-form-item__label');
+                for(var j=0; j<allLabels.length; j++){
+                    var lbl = allLabels[j];
+                    var lblText = (lbl.innerText || lbl.textContent || '').replace(/\s+/g, '');
+                    for(var v=0; v<variants.length; v++){
+                        if(lblText.indexOf(variants[v]) > -1 || variants[v].indexOf(lblText) > -1){
+                            var container = lbl.parentElement;
+                            while(container && container.tagName !== 'BODY') {
+                                var input = container.querySelector('input[type="text"], input[type="number"], input:not([type])');
+                                if(input && isValidInput(input)) return input;
+                                container = container.parentElement;
+                            }
+                        }
                     }
-                    if(el.value === item.v || el.value === String(Number(item.v)) || el.getAttribute('data-ocr-filled') === item.v){
+                }
+                return null;
+            }
+
+            // ★ 核心黑科技：绕过 Vue/React 数据劫持的 Native Setter ★
+            function triggerNativeSetter(el, valStr) {
+                el.removeAttribute('readonly');
+                el.removeAttribute('disabled');
+                
+                var valueSetter = Object.getOwnPropertyDescriptor(el, 'value') && Object.getOwnPropertyDescriptor(el, 'value').set;
+                var prototype = Object.getPrototypeOf(el);
+                var prototypeValueSetter = Object.getOwnPropertyDescriptor(prototype, 'value') && Object.getOwnPropertyDescriptor(prototype, 'value').set;
+
+                if (prototypeValueSetter && valueSetter !== prototypeValueSetter) {
+                    prototypeValueSetter.call(el, valStr);
+                } else if (valueSetter) {
+                    valueSetter.call(el, valStr);
+                } else {
+                    el.value = valStr;
+                }
+
+                el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+                
+                if (el.__vue__) {
+                    try {
+                        el.__vue__.${'$'}emit('input', valStr);
+                        el.__vue__.${'$'}emit('change', valStr);
+                    } catch(e){}
+                }
+            }
+
+            function forceSetValue(el, v) {
+                var valStr = v.toString();
+                el.dispatchEvent(new Event('focus', { bubbles: true }));
+                triggerNativeSetter(el, valStr);
+                el.dispatchEvent(new Event('blur', { bubbles: true }));
+                el.setAttribute('data-ocr-filled', valStr);
+            }
+
+            window.__ocrLastFilledCount = -1;
+            
+            function scanAndAutofillEngine(){
+                var currentFilled = 0;
+                
+                for(var i=0; i<targetData.length; i++){
+                    var item = targetData[i];
+                    var el = findInput(item);
+                    if(el){
+                        var valStr = item.v.toString();
+                        var currentVal = el.value ? el.value.toString() : '';
+                        
+                        if (currentVal !== valStr && el.getAttribute('data-ocr-filled') !== valStr) {
+                            forceSetValue(el, item.v);
+                        }
+                        
+                        if (el.value.toString() === valStr || el.getAttribute('data-ocr-filled') === valStr) {
+                            currentFilled++;
+                        }
+                    }
+                }
+        """)
+
+        // 注入复选框状态判定 (Pump IDs)
+        for (pid in pumpIds) {
+            val safePid = pid.esc()
+            sb.append("""
+                var chk = document.getElementById('$safePid') || document.querySelector('[value="$safePid"], [name="$safePid"]');
+                if(chk && chk.type === 'checkbox' && chk.offsetWidth > 0){
+                    if(!chk.closest('thead') && 
+                       !chk.closest('.el-table__header-wrapper') &&
+                       chk.id.indexOf('check-all') === -1) {
+                       
+                        if(chk.getAttribute('data-ocr-filled') !== 'true'){
+                            var cs = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked');
+                            if(cs && cs.set) { 
+                                cs.set.call(chk, true); 
+                            } else { 
+                                chk.checked = true; 
+                            }
+                            chk.dispatchEvent(new Event('change', { bubbles: true }));
+                            chk.setAttribute('data-ocr-filled', 'true');
+                        }
                         currentFilled++;
                     }
                 }
-            }
-        """)
-
-        // 泵/阀门复选框过滤
-        for (pid in pumpIds) {
-            sb.append("""
-            var chk=document.getElementById('${pid.esc()}')||document.querySelector('[value="${pid.esc()}"],[name="${pid.esc()}"]');
-            if(chk && chk.type==='checkbox' && chk.offsetWidth > 0){
-                if(!chk.closest('thead') && 
-                   !chk.closest('.el-table__header') &&
-                   !chk.closest('.el-table__header-wrapper') &&
-                   chk.getAttribute('is-indeterminate') === null &&
-                   chk.className.indexOf('el-table__header') === -1 &&
-                   chk.id.indexOf('select-all') === -1 && 
-                   chk.className.indexOf('select-all') === -1 &&
-                   chk.id.indexOf('check-all') === -1 && 
-                   chk.className.indexOf('check-all') === -1){
-                    if(chk.getAttribute('data-ocr-filled') !== 'true'){
-                        var cs=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'checked');
-                        if(cs&&cs.set){cs.set.call(chk,true);}else{chk.checked=true;}
-                        chk.dispatchEvent(new Event('change',{bubbles:true}));
-                        chk.setAttribute('data-ocr-filled', 'true');
-                    }
-                    currentFilled++;
-                }
-            }
             """)
         }
-        
+
+        // 闭环通知
         sb.append("""
-            if(currentFilled !== window.__ocrLastFilledCount){
-                window.__ocrLastFilledCount = currentFilled;
-                if(window.AndroidBridge && window.AndroidBridge.onFillComplete){
-                    AndroidBridge.onFillComplete(currentFilled);
+                if(currentFilled !== window.__ocrLastFilledCount){
+                    window.__ocrLastFilledCount = currentFilled;
+                    if(window.AndroidBridge && window.AndroidBridge.onFillComplete){
+                        AndroidBridge.onFillComplete(currentFilled);
+                    }
                 }
             }
-        }
 
-        setInterval(scanAndAutofillEngine, $AUTO_SCAN_INTERVAL_MS);
-        scanAndAutofillEngine();
+            setInterval(scanAndAutofillEngine, $AUTO_SCAN_INTERVAL_MS);
+            scanAndAutofillEngine();
+            
         })();
         """)
+
         return sb.toString()
     }
 
