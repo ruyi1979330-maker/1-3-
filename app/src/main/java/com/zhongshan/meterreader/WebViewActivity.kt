@@ -57,6 +57,11 @@ class WebViewActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        if (BuildConfig.DEBUG) {
+            WebView.setWebContentsDebuggingEnabled(true)
+        }
+
         binding = ActivityWebviewBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
@@ -104,7 +109,7 @@ class WebViewActivity : AppCompatActivity() {
                 val host = runCatching { android.net.Uri.parse(url ?: "").host }.getOrNull() ?: ""
                 if (host.contains("zs-hospital") || url?.contains("zs-hospital") == true || host.isNotEmpty()) {
                     binding.tvStatusBanner.visibility = View.VISIBLE
-                    binding.tvStatusBanner.text = "🎉 连接成功！随意切换任意标签页，引擎将自动填充。"
+                    binding.tvStatusBanner.text = "🎉 连接成功！引擎已启动..."
                     view?.evaluateJavascript(fillJsPayload, null)
                 }
             }
@@ -136,6 +141,50 @@ class WebViewActivity : AppCompatActivity() {
         sb.append("if(window.__ocrFillEngineStarted) return;")
         sb.append("window.__ocrFillEngineStarted = true;")
 
+        // 全选按钮 CSS 修复（自定义 Checkbox + Element UI 兼容）
+        sb.append("""
+            var style=document.createElement('style');
+            style.innerHTML=`
+                /* Element UI 全选 */
+                .el-table__header-wrapper .el-checkbox__label,
+                .el-table__header .el-checkbox__label {
+                    visibility: hidden;
+                    position: relative;
+                }
+                .el-table__header-wrapper .el-checkbox__label:after,
+                .el-table__header .el-checkbox__label:after {
+                    content: '全选';
+                    visibility: visible !important;
+                    position: absolute;
+                    left: 0;
+                    top: 0;
+                    white-space: nowrap;
+                    color: #606266;
+                }
+                /* 自定义 ming Checkbox 全选 */
+                label[title='Select All'] .Checkbox-text,
+                label[title='Select All'] .Font13 {
+                    visibility: hidden;
+                    font-size: 0;
+                }
+                label[title='Select All'] {
+                    position: relative;
+                }
+                label[title='Select All']::after {
+                    content: '全选';
+                    visibility: visible;
+                    position: absolute;
+                    left: 20px;
+                    top: 50%;
+                    transform: translateY(-50%);
+                    white-space: nowrap;
+                    font-size: 13px;
+                    color: #606266;
+                }
+            `;
+            document.head.appendChild(style);
+        """)
+
         sb.append("""
             if(!window.__toFixedHooked){
                 window.__toFixedHooked = true;
@@ -157,71 +206,76 @@ class WebViewActivity : AppCompatActivity() {
         }
         
         sb.append("""
+        // 获取表单标签文本（去除空格和括号内容）
+        function getLabelText(item) {
+            return item.label.replace(/\s+/g, '').replace(/[（(].*?[)）]/g, '');
+        }
+        
+        // 生成标签变体（同义词）
+        function getLabelVariants(label) {
+            var variants = [label];
+            if(label.indexOf('进水') > -1) variants.push(label.replace('进水','进口'));
+            if(label.indexOf('进口') > -1) variants.push(label.replace('进口','进水'));
+            if(label.indexOf('出水') > -1) variants.push(label.replace('出水','出口'));
+            if(label.indexOf('出口') > -1) variants.push(label.replace('出口','出水'));
+            if(label.indexOf('返回') > -1) variants.push(label.replace('返回','回水'));
+            if(label.indexOf('回水') > -1) variants.push(label.replace('回水','返回'));
+            return variants;
+        }
+        
         function findInput(item){
+            // 首先尝试 id/name
             var el = document.getElementById(item.id) || document.querySelector('[name="'+item.id+'"]');
             if(el && isValidInput(el)) return el;
-            if(!item.label) return null;
-
-            var cleanLabel = item.label.replace(/\s+/g, '').replace(/（预设值）|\(预设值\)|（.*?）|\(.*?\)/g, '');
             
-            var machinePrefix = null;
-            var coreMetric = cleanLabel;
-            var matchPrefix = cleanLabel.match(/(?:机组|离心机|螺杆机)?(\d+)(?:#|号|机)/);
-            if(matchPrefix){
-                machinePrefix = matchPrefix[1];
-                coreMetric = cleanLabel.replace(matchPrefix[0], '');
-            }
-
-            if(machinePrefix){
-                var tables = document.querySelectorAll('table, .el-table');
-                for(var t=0; t<tables.length; t++){
-                    var table = tables[t];
-                    var colIndex = -1;
-                    var ths = table.querySelectorAll('th');
-                    for(var h=0; h<ths.length; h++){
-                        var thTxt = (ths[h].innerText || ths[h].textContent || '').replace(/\s+/g, '');
-                        if(thTxt.indexOf(coreMetric) > -1 || coreMetric.indexOf(thTxt) > -1){
-                            colIndex = h;
-                            break;
-                        }
-                    }
-                    if(colIndex > -1){
-                        var rows = table.querySelectorAll('tbody tr, .el-table__row');
-                        for(var r=0; r<rows.length; r++){
-                            var row = rows[r];
-                            var rowTxt = (row.innerText || row.textContent || '').replace(/\s+/g, '');
-                            var isTargetRow = rowTxt.indexOf(machinePrefix + '#') > -1 || 
-                                              rowTxt.indexOf(machinePrefix + '号') > -1 || 
-                                              rowTxt.indexOf('机组' + machinePrefix) > -1 ||
-                                              (row.cells && row.cells[0] && (row.cells[0].innerText || '').replace(/\s+/g, '').indexOf(machinePrefix) > -1);
-                            if(isTargetRow){
-                                var cells = row.querySelectorAll('td');
-                                if(cells[colIndex]){
-                                    var inp = cells[colIndex].querySelector('input, textarea');
-                                    if(inp && isValidInput(inp)) return inp;
-                                }
-                            }
-                        }
+            if(!item.label) return null;
+            
+            var cleanLabel = getLabelText(item);
+            var variants = getLabelVariants(cleanLabel);
+            
+            // 遍历自定义表单项 .customFormItem
+            var formItems = document.querySelectorAll('.customFormItem');
+            for(var i=0; i<formItems.length; i++){
+                var formItem = formItems[i];
+                var labelDiv = formItem.querySelector('.customFormItemLabel .controlLabelName');
+                if(!labelDiv) continue;
+                var labelText = (labelDiv.innerText || labelDiv.textContent || '').replace(/\s+/g, '');
+                
+                var matched = false;
+                for(var v=0; v<variants.length; v++){
+                    if(labelText.indexOf(variants[v]) > -1 || variants[v].indexOf(labelText) > -1){
+                        matched = true;
+                        break;
                     }
                 }
+                
+                if(matched){
+                    var input = formItem.querySelector('input[type="text"], input[type="number"], input:not([type])');
+                    if(input && isValidInput(input)) return input;
+                }
             }
-
-            var allNodes = document.querySelectorAll('*');
-            for(var i=0; i<allNodes.length; i++){
-                var node = allNodes[i];
-                if(node.children.length > 0 && node.tagName !== 'LABEL' && node.tagName !== 'TD' && node.tagName !== 'TH') continue;
-                var txt = (node.innerText || node.textContent || '').replace(/\s+/g, '');
-                if(txt.indexOf(cleanLabel) >= 0 || (machinePrefix && txt.indexOf(coreMetric) >= 0)){
-                    var parent = node;
-                    for(var j=0; j<8; j++){
-                        if(!parent || parent.tagName === 'BODY') break;
-                        if(parent.tagName === 'TR' && parent.closest('thead')) break;
-                        var input = parent.querySelector('input, textarea');
+            
+            // 宽泛兜底：只根据标签文字查找
+            var allLabels = document.querySelectorAll('.controlLabelName');
+            for(var j=0; j<allLabels.length; j++){
+                var lbl = allLabels[j];
+                var lblText = (lbl.innerText || lbl.textContent || '').replace(/\s+/g, '');
+                var matched = false;
+                for(var v=0; v<variants.length; v++){
+                    if(lblText.indexOf(variants[v]) > -1 || variants[v].indexOf(lblText) > -1){
+                        matched = true;
+                        break;
+                    }
+                }
+                if(matched){
+                    var formItem = lbl.closest('.customFormItem');
+                    if(formItem){
+                        var input = formItem.querySelector('input[type="text"], input[type="number"], input:not([type])');
                         if(input && isValidInput(input)) return input;
-                        parent = parent.parentElement;
                     }
                 }
             }
+            
             return null;
         }
 
@@ -232,13 +286,12 @@ class WebViewActivity : AppCompatActivity() {
             var type = (el.type || '').toLowerCase();
             if(type === 'checkbox' || type === 'radio' || type === 'hidden' || type === 'button' || type === 'submit' || type === 'file') return false;
             if(el.readOnly || el.disabled) return false;
-            if(el.closest && (el.closest('thead') || el.closest('.el-table__header') || el.closest('.el-select'))) return false;
+            if(el.closest && el.closest('thead')) return false;
             if(el.offsetWidth === 0 || el.offsetHeight === 0) return false;
             return true;
         }
 
         function setVal(el, v){
-            // ★ 核心修复：若当前元素处于焦点，强制失焦，否则 Vue 组件会拒绝程序化赋值
             if(document.activeElement === el){
                 el.blur();
             }
@@ -246,7 +299,6 @@ class WebViewActivity : AppCompatActivity() {
             var numericV = Number(v);
             var finalV = isNaN(numericV) ? v : numericV;
 
-            // 深度注入 Vue 组件
             try {
                 var p = el;
                 while (p && !p.__vue__) { p = p.parentElement; }
@@ -262,7 +314,6 @@ class WebViewActivity : AppCompatActivity() {
                 }
             } catch(e){}
 
-            // 原生赋值
             try {
                 var proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
                 var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
@@ -296,12 +347,11 @@ class WebViewActivity : AppCompatActivity() {
             }
         """)
 
-        // 泵/阀门复选框：绝对避免全选按钮
+        // 泵/阀门复选框过滤
         for (pid in pumpIds) {
             sb.append("""
             var chk=document.getElementById('${pid.esc()}')||document.querySelector('[value="${pid.esc()}"],[name="${pid.esc()}"]');
             if(chk && chk.type==='checkbox' && chk.offsetWidth > 0){
-                // 跳过表头、全选、半选状态、header-wrapper 中的任何复选框
                 if(!chk.closest('thead') && 
                    !chk.closest('.el-table__header') &&
                    !chk.closest('.el-table__header-wrapper') &&
