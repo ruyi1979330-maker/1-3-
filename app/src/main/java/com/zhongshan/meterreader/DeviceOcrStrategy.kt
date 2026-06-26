@@ -21,142 +21,156 @@ object DeviceOcrStrategy {
     )
 
     // =====================================================================
-    // 方案 A：基于 3000×4000 黑边原图的绝对百分比坐标
+    // 方案 A：绝对百分比坐标（基于 3000×4000 黑边原图）
     // 特灵点阵屏 wPercent 已自动 ×1.12
     // =====================================================================
-    private val absoluteConfigs = mapOf(
-        // ------- 1号机房 特灵螺杆 1# 蒸发器 -------
-        "screw_1_0" to listOf(
-            HardcodedRoi(0.8197f, 0.3783f, 0.1422f, 0.0275f, "field_1_01", "1#蒸发器进口水温"),
-            HardcodedRoi(0.8363f, 0.4315f, 0.1258f, 0.0280f, "field_1_02", "1#蒸发器出口水温"),
-            HardcodedRoi(0.7270f, 0.5378f, 0.2483f, 0.0313f, "field_1_05", "1#蒸发器冷媒压力"),
-            HardcodedRoi(0.8373f, 0.4845f, 0.1236f, 0.0290f, "field_1_06", "1#蒸发器蒸发温度")
-        ),
-        "screw_1_1" to listOf(
-            HardcodedRoi(0.8177f, 0.3775f, 0.1516f, 0.0298f, "field_1_08", "1#冷凝器进口水温"),
-            HardcodedRoi(0.8177f, 0.4323f, 0.1493f, 0.0265f, "field_1_09", "1#冷凝器出口水温"),
-            HardcodedRoi(0.7270f, 0.5378f, 0.2472f, 0.0313f, "field_1_12", "1#冷凝器冷媒压力"),
-            HardcodedRoi(0.8143f, 0.4853f, 0.1520f, 0.0298f, "field_1_13", "1#冷凝器冷凝温度")
-        ),
-        "screw_1_2" to listOf(
-            HardcodedRoi(0.7300f, 0.3770f, 0.2486f, 0.0323f, "field_1_14", "1#压缩机油压"),
-            HardcodedRoi(0.8167f, 0.4850f, 0.1467f, 0.0280f, "field_1_15", "1#压缩机排出口温度"),
-            HardcodedRoi(0.4853f, 0.5888f, 0.5216f, 0.0305f, "field_1_18", "1#主机负载(%RLA)"),
-            HardcodedRoi(0.4643f, 0.6443f, 0.5357f, 0.0283f, "field_1_17", "1#电机电流(L1)")
-        ),
 
-        // ------- 1号机房 特灵螺杆 2#（坐标同1#，fieldId +30） -------
-        "screw_2_0" to absoluteConfigs["screw_1_0"]!!.map { it.copy(fieldId = shiftId(it.fieldId, 30)) },
-        "screw_2_1" to absoluteConfigs["screw_1_1"]!!.map { it.copy(fieldId = shiftId(it.fieldId, 30)) },
-        "screw_2_2" to absoluteConfigs["screw_1_2"]!!.map { it.copy(fieldId = shiftId(it.fieldId, 30)) },
-
-        // ------- 1号机房 特灵螺杆 3#（坐标同1#，fieldId +50） -------
-        "screw_3_0" to absoluteConfigs["screw_1_0"]!!.map { it.copy(fieldId = shiftId(it.fieldId, 50)) },
-        "screw_3_1" to absoluteConfigs["screw_1_1"]!!.map { it.copy(fieldId = shiftId(it.fieldId, 50)) },
-        "screw_3_2" to absoluteConfigs["screw_1_2"]!!.map { it.copy(fieldId = shiftId(it.fieldId, 50)) },
-
-        // ------- 1号机房 约克离心机 -------
-        "cent_1_0" to listOf(
-            HardcodedRoi(0.8167f, 0.5385f, 0.0873f, 0.0210f, "field_1_69", "蒸发器出水温度"),
-            HardcodedRoi(0.8153f, 0.5610f, 0.0887f, 0.0188f, "field_1_68", "蒸发器进水温度"),
-            HardcodedRoi(0.7570f, 0.8213f, 0.1180f, 0.0195f, "field_1_78", "蒸发器冷媒压力"),
-            HardcodedRoi(0.7560f, 0.8440f, 0.1177f, 0.0195f, "field_1_70", "蒸发器蒸发温度"),
-            HardcodedRoi(0.1393f, 0.5368f, 0.0907f, 0.0213f, "field_1_71", "冷凝器出水温度"),
-            HardcodedRoi(0.1403f, 0.5610f, 0.0907f, 0.0205f, "field_1_79", "冷凝器进水温度"),
-            HardcodedRoi(0.2697f, 0.8190f, 0.1187f, 0.0225f, "field_1_77", "冷凝器冷媒压力"),
-            HardcodedRoi(0.2717f, 0.8440f, 0.1177f, 0.0195f, "field_1_81", "冷凝器冷凝温度"),
-            HardcodedRoi(0.2717f, 0.4338f, 0.0917f, 0.0203f, "field_1_76", "压缩机出口温度"),
-            HardcodedRoi(0.2717f, 0.4565f, 0.0677f, 0.0195f, "field_1_82", "压缩机导液开度"),
-            HardcodedRoi(0.7843f, 0.4463f, 0.1217f, 0.0210f, "field_1_74", "压缩机机油压力"),
-            HardcodedRoi(0.7863f, 0.4228f, 0.1187f, 0.0213f, "field_1_75", "压缩机油箱温度")
-        ),
-
-        // ------- 3号机房 约克螺杆 1# -------
-        "screw_3_1_0" to listOf(
-            HardcodedRoi(0.8113f, 0.5828f, 0.0897f, 0.0203f, "field_3_02", "1#蒸发器出水温度"),
-            HardcodedRoi(0.8113f, 0.6063f, 0.0907f, 0.0203f, "field_3_01", "1#蒸发器进水温度"),
-            HardcodedRoi(0.7500f, 0.8423f, 0.1177f, 0.0195f, "field_3_05", "1#蒸发器蒸发压力"),
-            HardcodedRoi(0.7510f, 0.8655f, 0.1187f, 0.0198f, "field_3_06", "1#蒸发器蒸发温度"),
-            HardcodedRoi(0.1417f, 0.5805f, 0.0873f, 0.0188f, "field_3_09", "1#冷凝器出水温度"),
-            HardcodedRoi(0.1417f, 0.6023f, 0.0863f, 0.0213f, "field_3_08", "1#冷凝器进水温度"),
-            HardcodedRoi(0.2707f, 0.8383f, 0.1147f, 0.0195f, "field_3_12", "1#冷凝器冷凝压力"),
-            HardcodedRoi(0.2717f, 0.8603f, 0.1137f, 0.0203f, "field_3_13", "1#冷凝器冷凝温度"),
-            HardcodedRoi(0.8487f, 0.4485f, 0.0917f, 0.0195f, "field_3_16", "1#压缩机排口温度"),
-            HardcodedRoi(0.8500f, 0.5243f, 0.0667f, 0.0203f, "field_3_17", "1#压缩机滑阀位置"),
-            HardcodedRoi(0.2790f, 0.4530f, 0.1167f, 0.0180f, "field_3_14", "1#压缩机油压"),
-            HardcodedRoi(0.2790f, 0.4735f, 0.0853f, 0.0195f, "field_3_15", "1#压缩机油温")
-        ),
-
-        // ------- 3号机房 约克螺杆 2#（坐标同1#，fieldId +30） -------
-        "screw_3_2_0" to absoluteConfigs["screw_3_1_0"]!!.map { it.copy(fieldId = shiftId(it.fieldId, 30)) }
+    // 基础机型独立定义（避免递归）
+    private val screw1Evaporator = listOf(
+        HardcodedRoi(0.8197f, 0.3783f, 0.1422f, 0.0275f, "field_1_01", "1#蒸发器进口水温"),
+        HardcodedRoi(0.8363f, 0.4315f, 0.1258f, 0.0280f, "field_1_02", "1#蒸发器出口水温"),
+        HardcodedRoi(0.7270f, 0.5378f, 0.2483f, 0.0313f, "field_1_05", "1#蒸发器冷媒压力"),
+        HardcodedRoi(0.8373f, 0.4845f, 0.1236f, 0.0290f, "field_1_06", "1#蒸发器蒸发温度")
     )
 
+    private val screw1Condenser = listOf(
+        HardcodedRoi(0.8177f, 0.3775f, 0.1516f, 0.0298f, "field_1_08", "1#冷凝器进口水温"),
+        HardcodedRoi(0.8177f, 0.4323f, 0.1493f, 0.0265f, "field_1_09", "1#冷凝器出口水温"),
+        HardcodedRoi(0.7270f, 0.5378f, 0.2472f, 0.0313f, "field_1_12", "1#冷凝器冷媒压力"),
+        HardcodedRoi(0.8143f, 0.4853f, 0.1520f, 0.0298f, "field_1_13", "1#冷凝器冷凝温度")
+    )
+
+    private val screw1Compressor = listOf(
+        HardcodedRoi(0.7300f, 0.3770f, 0.2486f, 0.0323f, "field_1_14", "1#压缩机油压"),
+        HardcodedRoi(0.8167f, 0.4850f, 0.1467f, 0.0280f, "field_1_15", "1#压缩机排出口温度"),
+        HardcodedRoi(0.4853f, 0.5888f, 0.5216f, 0.0305f, "field_1_18", "1#主机负载(%RLA)"),
+        HardcodedRoi(0.4643f, 0.6443f, 0.5357f, 0.0283f, "field_1_17", "1#电机电流(L1)")
+    )
+
+    private val yorkCentrifugal = listOf(
+        HardcodedRoi(0.8167f, 0.5385f, 0.0873f, 0.0210f, "field_1_69", "蒸发器出水温度"),
+        HardcodedRoi(0.8153f, 0.5610f, 0.0887f, 0.0188f, "field_1_68", "蒸发器进水温度"),
+        HardcodedRoi(0.7570f, 0.8213f, 0.1180f, 0.0195f, "field_1_78", "蒸发器冷媒压力"),
+        HardcodedRoi(0.7560f, 0.8440f, 0.1177f, 0.0195f, "field_1_70", "蒸发器蒸发温度"),
+        HardcodedRoi(0.1393f, 0.5368f, 0.0907f, 0.0213f, "field_1_71", "冷凝器出水温度"),
+        HardcodedRoi(0.1403f, 0.5610f, 0.0907f, 0.0205f, "field_1_79", "冷凝器进水温度"),
+        HardcodedRoi(0.2697f, 0.8190f, 0.1187f, 0.0225f, "field_1_77", "冷凝器冷媒压力"),
+        HardcodedRoi(0.2717f, 0.8440f, 0.1177f, 0.0195f, "field_1_81", "冷凝器冷凝温度"),
+        HardcodedRoi(0.2717f, 0.4338f, 0.0917f, 0.0203f, "field_1_76", "压缩机出口温度"),
+        HardcodedRoi(0.2717f, 0.4565f, 0.0677f, 0.0195f, "field_1_82", "压缩机导液开度"),
+        HardcodedRoi(0.7843f, 0.4463f, 0.1217f, 0.0210f, "field_1_74", "压缩机机油压力"),
+        HardcodedRoi(0.7863f, 0.4228f, 0.1187f, 0.0213f, "field_1_75", "压缩机油箱温度")
+    )
+
+    private val screw3_1_abs = listOf(
+        HardcodedRoi(0.8113f, 0.5828f, 0.0897f, 0.0203f, "field_3_02", "1#蒸发器出水温度"),
+        HardcodedRoi(0.8113f, 0.6063f, 0.0907f, 0.0203f, "field_3_01", "1#蒸发器进水温度"),
+        HardcodedRoi(0.7500f, 0.8423f, 0.1177f, 0.0195f, "field_3_05", "1#蒸发器蒸发压力"),
+        HardcodedRoi(0.7510f, 0.8655f, 0.1187f, 0.0198f, "field_3_06", "1#蒸发器蒸发温度"),
+        HardcodedRoi(0.1417f, 0.5805f, 0.0873f, 0.0188f, "field_3_09", "1#冷凝器出水温度"),
+        HardcodedRoi(0.1417f, 0.6023f, 0.0863f, 0.0213f, "field_3_08", "1#冷凝器进水温度"),
+        HardcodedRoi(0.2707f, 0.8383f, 0.1147f, 0.0195f, "field_3_12", "1#冷凝器冷凝压力"),
+        HardcodedRoi(0.2717f, 0.8603f, 0.1137f, 0.0203f, "field_3_13", "1#冷凝器冷凝温度"),
+        HardcodedRoi(0.8487f, 0.4485f, 0.0917f, 0.0195f, "field_3_16", "1#压缩机排口温度"),
+        HardcodedRoi(0.8500f, 0.5243f, 0.0667f, 0.0203f, "field_3_17", "1#压缩机滑阀位置"),
+        HardcodedRoi(0.2790f, 0.4530f, 0.1167f, 0.0180f, "field_3_14", "1#压缩机油压"),
+        HardcodedRoi(0.2790f, 0.4735f, 0.0853f, 0.0195f, "field_3_15", "1#压缩机油温")
+    )
+
+    // 组装绝对坐标配置 Map
+    private val absoluteConfigs: Map<String, List<HardcodedRoi>> = run {
+        val map = mutableMapOf<String, List<HardcodedRoi>>()
+        // 特灵1#
+        map["screw_1_0"] = screw1Evaporator
+        map["screw_1_1"] = screw1Condenser
+        map["screw_1_2"] = screw1Compressor
+        // 特灵2# (fieldId +30)
+        map["screw_2_0"] = screw1Evaporator.map { it.copy(fieldId = shiftId(it.fieldId, 30)) }
+        map["screw_2_1"] = screw1Condenser.map { it.copy(fieldId = shiftId(it.fieldId, 30)) }
+        map["screw_2_2"] = screw1Compressor.map { it.copy(fieldId = shiftId(it.fieldId, 30)) }
+        // 特灵3# (fieldId +50)
+        map["screw_3_0"] = screw1Evaporator.map { it.copy(fieldId = shiftId(it.fieldId, 50)) }
+        map["screw_3_1"] = screw1Condenser.map { it.copy(fieldId = shiftId(it.fieldId, 50)) }
+        map["screw_3_2"] = screw1Compressor.map { it.copy(fieldId = shiftId(it.fieldId, 50)) }
+        // 约克离心机
+        map["cent_1_0"] = yorkCentrifugal
+        // 约克螺杆1#
+        map["screw_3_1_0"] = screw3_1_abs
+        // 约克螺杆2# (fieldId +30)
+        map["screw_3_2_0"] = screw3_1_abs.map { it.copy(fieldId = shiftId(it.fieldId, 30)) }
+        map
+    }
+
     // =====================================================================
-    // 方案 B：基于纯发光屏幕区域的相对百分比坐标（裁剪后识别用）
-    // 坐标来源：发光区域测量值，范围0~1
+    // 方案 B：相对百分比坐标（纯发光屏幕，范围 0~1）
     // =====================================================================
-    private val relativeConfigs = mapOf(
-        // 特灵蒸发器发光区域: (981,918) ~ (2946,3099), 宽1965, 高2181
-        "screw_1_0" to listOf(
-            RoiRelative(0.7522f, 0.2728f, 0.9461f, 0.3232f, "field_1_01", "1#蒸发器进口水温"),
-            RoiRelative(0.7776f, 0.3705f, 0.9491f, 0.4218f, "field_1_02", "1#蒸发器出口水温"),
-            RoiRelative(0.6107f, 0.5654f, 0.9491f, 0.6226f, "field_1_05", "1#蒸发器冷媒压力"),
-            RoiRelative(0.7791f, 0.4677f, 0.9476f, 0.5209f, "field_1_06", "1#蒸发器蒸发温度")
-        ),
-        // 特灵冷凝器发光区域: (104,920) ~ (2936,3095), 宽2832, 高2175
-        "screw_1_1" to listOf(
-            RoiRelative(0.8295f, 0.2713f, 0.9725f, 0.3259f, "field_1_08", "1#冷凝器进口水温"),
-            RoiRelative(0.8295f, 0.3719f, 0.9703f, 0.4207f, "field_1_09", "1#冷凝器出口水温"),
-            RoiRelative(0.7334f, 0.5659f, 0.9675f, 0.6234f, "field_1_12", "1#冷凝器冷媒压力"),
-            RoiRelative(0.8259f, 0.4694f, 0.9696f, 0.5241f, "field_1_13", "1#冷凝器冷凝温度")
-        ),
-        // 特灵压缩机发光区域: (104,914) ~ (2942,3108), 宽2838, 高2194
-        "screw_1_2" to listOf(
-            RoiRelative(0.7350f, 0.2707f, 0.9697f, 0.3295f, "field_1_14", "1#压缩机油压"),
-            RoiRelative(0.8266f, 0.4676f, 0.9651f, 0.5187f, "field_1_15", "1#压缩机排出口温度"),
-            RoiRelative(0.4764f, 0.6568f, 0.9686f, 0.7124f, "field_1_18", "1#主机负载(%RLA)"),
-            RoiRelative(0.4542f, 0.7580f, 0.9598f, 0.8095f, "field_1_17", "1#电机电流(L1)")
-        ),
-        // 约克离心机发光区域: (101,1400) ~ (2873,3484), 宽2772, 高2084
-        "cent_1_0" to listOf(
-            RoiRelative(0.8474f, 0.3619f, 0.9419f, 0.4021f, "field_1_69", "蒸发器出水温度"),
-            RoiRelative(0.8459f, 0.4050f, 0.9419f, 0.4410f, "field_1_68", "蒸发器进水温度"),
-            RoiRelative(0.7828f, 0.9045f, 0.9105f, 0.9420f, "field_1_78", "蒸发器冷媒压力"),
-            RoiRelative(0.7817f, 0.9482f, 0.9091f, 0.9856f, "field_1_70", "蒸发器蒸发温度"),
-            RoiRelative(0.1144f, 0.3585f, 0.2125f, 0.3992f, "field_1_71", "冷凝器出水温度"),
-            RoiRelative(0.1154f, 0.4050f, 0.2136f, 0.4443f, "field_1_79", "冷凝器进水温度"),
-            RoiRelative(0.2554f, 0.9002f, 0.3838f, 0.9434f, "field_1_77", "冷凝器冷媒压力"),
-            RoiRelative(0.2576f, 0.9482f, 0.3849f, 0.9856f, "field_1_81", "冷凝器冷凝温度"),
-            RoiRelative(0.2576f, 0.1607f, 0.3568f, 0.1996f, "field_1_76", "压缩机出口温度"),
-            RoiRelative(0.2576f, 0.2044f, 0.3308f, 0.2418f, "field_1_82", "压缩机导液开度"),
-            RoiRelative(0.8124f, 0.1847f, 0.9441f, 0.2250f, "field_1_74", "压缩机机油压力"),
-            RoiRelative(0.8146f, 0.1396f, 0.9430f, 0.1804f, "field_1_75", "压缩机油箱温度")
-        ),
-        // 约克螺杆发光区域: (110,1488) ~ (2876,3569), 宽2766, 高2081
-        "screw_3_1_0" to listOf(
-            RoiRelative(0.8402f, 0.4051f, 0.9375f, 0.4440f, "field_3_02", "1#蒸发器出水温度"),
-            RoiRelative(0.8402f, 0.4503f, 0.9385f, 0.4892f, "field_3_01", "1#蒸发器进水温度"),
-            RoiRelative(0.7737f, 0.9039f, 0.9013f, 0.9414f, "field_3_05", "1#蒸发器蒸发压力"),
-            RoiRelative(0.7748f, 0.9486f, 0.9035f, 0.9865f, "field_3_06", "1#蒸发器蒸发温度"),
-            RoiRelative(0.1139f, 0.4008f, 0.2086f, 0.4368f, "field_3_09", "1#冷凝器出水温度"),
-            RoiRelative(0.1139f, 0.4426f, 0.2075f, 0.4834f, "field_3_08", "1#冷凝器进水温度"),
-            RoiRelative(0.2538f, 0.8962f, 0.3782f, 0.9337f, "field_3_12", "1#冷凝器冷凝压力"),
-            RoiRelative(0.2549f, 0.9385f, 0.3782f, 0.9774f, "field_3_13", "1#冷凝器冷凝温度"),
-            RoiRelative(0.8807f, 0.1470f, 0.9801f, 0.1845f, "field_3_16", "1#压缩机排口温度"),
-            RoiRelative(0.8821f, 0.2926f, 0.9544f, 0.3316f, "field_3_17", "1#压缩机滑阀位置"),
-            RoiRelative(0.2628f, 0.1557f, 0.3894f, 0.1903f, "field_3_14", "1#压缩机油压"),
-            RoiRelative(0.2628f, 0.1951f, 0.3554f, 0.2326f, "field_3_15", "1#压缩机油温")
-        )
-    ).apply {
-        // 特灵2#、3#的相对坐标同1#，只改fieldId
-        put("screw_2_0", get("screw_1_0")!!.map { it.copy(fieldId = shiftId(it.fieldId, 30)) })
-        put("screw_2_1", get("screw_1_1")!!.map { it.copy(fieldId = shiftId(it.fieldId, 30)) })
-        put("screw_2_2", get("screw_1_2")!!.map { it.copy(fieldId = shiftId(it.fieldId, 30)) })
-        put("screw_3_0", get("screw_1_0")!!.map { it.copy(fieldId = shiftId(it.fieldId, 50)) })
-        put("screw_3_1", get("screw_1_1")!!.map { it.copy(fieldId = shiftId(it.fieldId, 50)) })
-        put("screw_3_2", get("screw_1_2")!!.map { it.copy(fieldId = shiftId(it.fieldId, 50)) })
-        // 约克螺杆2#
-        put("screw_3_2_0", get("screw_3_1_0")!!.map { it.copy(fieldId = shiftId(it.fieldId, 30)) })
+
+    private val screw1EvapRel = listOf(
+        RoiRelative(0.7522f, 0.2728f, 0.9461f, 0.3232f, "field_1_01", "1#蒸发器进口水温"),
+        RoiRelative(0.7776f, 0.3705f, 0.9491f, 0.4218f, "field_1_02", "1#蒸发器出口水温"),
+        RoiRelative(0.6107f, 0.5654f, 0.9491f, 0.6226f, "field_1_05", "1#蒸发器冷媒压力"),
+        RoiRelative(0.7791f, 0.4677f, 0.9476f, 0.5209f, "field_1_06", "1#蒸发器蒸发温度")
+    )
+
+    private val screw1CondRel = listOf(
+        RoiRelative(0.8295f, 0.2713f, 0.9725f, 0.3259f, "field_1_08", "1#冷凝器进口水温"),
+        RoiRelative(0.8295f, 0.3719f, 0.9703f, 0.4207f, "field_1_09", "1#冷凝器出口水温"),
+        RoiRelative(0.7334f, 0.5659f, 0.9675f, 0.6234f, "field_1_12", "1#冷凝器冷媒压力"),
+        RoiRelative(0.8259f, 0.4694f, 0.9696f, 0.5241f, "field_1_13", "1#冷凝器冷凝温度")
+    )
+
+    private val screw1CompRel = listOf(
+        RoiRelative(0.7350f, 0.2707f, 0.9697f, 0.3295f, "field_1_14", "1#压缩机油压"),
+        RoiRelative(0.8266f, 0.4676f, 0.9651f, 0.5187f, "field_1_15", "1#压缩机排出口温度"),
+        RoiRelative(0.4764f, 0.6568f, 0.9686f, 0.7124f, "field_1_18", "1#主机负载(%RLA)"),
+        RoiRelative(0.4542f, 0.7580f, 0.9598f, 0.8095f, "field_1_17", "1#电机电流(L1)")
+    )
+
+    private val centRel = listOf(
+        RoiRelative(0.8474f, 0.3619f, 0.9419f, 0.4021f, "field_1_69", "蒸发器出水温度"),
+        RoiRelative(0.8459f, 0.4050f, 0.9419f, 0.4410f, "field_1_68", "蒸发器进水温度"),
+        RoiRelative(0.7828f, 0.9045f, 0.9105f, 0.9420f, "field_1_78", "蒸发器冷媒压力"),
+        RoiRelative(0.7817f, 0.9482f, 0.9091f, 0.9856f, "field_1_70", "蒸发器蒸发温度"),
+        RoiRelative(0.1144f, 0.3585f, 0.2125f, 0.3992f, "field_1_71", "冷凝器出水温度"),
+        RoiRelative(0.1154f, 0.4050f, 0.2136f, 0.4443f, "field_1_79", "冷凝器进水温度"),
+        RoiRelative(0.2554f, 0.9002f, 0.3838f, 0.9434f, "field_1_77", "冷凝器冷媒压力"),
+        RoiRelative(0.2576f, 0.9482f, 0.3849f, 0.9856f, "field_1_81", "冷凝器冷凝温度"),
+        RoiRelative(0.2576f, 0.1607f, 0.3568f, 0.1996f, "field_1_76", "压缩机出口温度"),
+        RoiRelative(0.2576f, 0.2044f, 0.3308f, 0.2418f, "field_1_82", "压缩机导液开度"),
+        RoiRelative(0.8124f, 0.1847f, 0.9441f, 0.2250f, "field_1_74", "压缩机机油压力"),
+        RoiRelative(0.8146f, 0.1396f, 0.9430f, 0.1804f, "field_1_75", "压缩机油箱温度")
+    )
+
+    private val screw3_1_rel = listOf(
+        RoiRelative(0.8402f, 0.4051f, 0.9375f, 0.4440f, "field_3_02", "1#蒸发器出水温度"),
+        RoiRelative(0.8402f, 0.4503f, 0.9385f, 0.4892f, "field_3_01", "1#蒸发器进水温度"),
+        RoiRelative(0.7737f, 0.9039f, 0.9013f, 0.9414f, "field_3_05", "1#蒸发器蒸发压力"),
+        RoiRelative(0.7748f, 0.9486f, 0.9035f, 0.9865f, "field_3_06", "1#蒸发器蒸发温度"),
+        RoiRelative(0.1139f, 0.4008f, 0.2086f, 0.4368f, "field_3_09", "1#冷凝器出水温度"),
+        RoiRelative(0.1139f, 0.4426f, 0.2075f, 0.4834f, "field_3_08", "1#冷凝器进水温度"),
+        RoiRelative(0.2538f, 0.8962f, 0.3782f, 0.9337f, "field_3_12", "1#冷凝器冷凝压力"),
+        RoiRelative(0.2549f, 0.9385f, 0.3782f, 0.9774f, "field_3_13", "1#冷凝器冷凝温度"),
+        RoiRelative(0.8807f, 0.1470f, 0.9801f, 0.1845f, "field_3_16", "1#压缩机排口温度"),
+        RoiRelative(0.8821f, 0.2926f, 0.9544f, 0.3316f, "field_3_17", "1#压缩机滑阀位置"),
+        RoiRelative(0.2628f, 0.1557f, 0.3894f, 0.1903f, "field_3_14", "1#压缩机油压"),
+        RoiRelative(0.2628f, 0.1951f, 0.3554f, 0.2326f, "field_3_15", "1#压缩机油温")
+    )
+
+    private val relativeConfigs: Map<String, List<RoiRelative>> = run {
+        val map = mutableMapOf<String, List<RoiRelative>>()
+        map["screw_1_0"] = screw1EvapRel
+        map["screw_1_1"] = screw1CondRel
+        map["screw_1_2"] = screw1CompRel
+        map["screw_2_0"] = screw1EvapRel.map { it.copy(fieldId = shiftId(it.fieldId, 30)) }
+        map["screw_2_1"] = screw1CondRel.map { it.copy(fieldId = shiftId(it.fieldId, 30)) }
+        map["screw_2_2"] = screw1CompRel.map { it.copy(fieldId = shiftId(it.fieldId, 30)) }
+        map["screw_3_0"] = screw1EvapRel.map { it.copy(fieldId = shiftId(it.fieldId, 50)) }
+        map["screw_3_1"] = screw1CondRel.map { it.copy(fieldId = shiftId(it.fieldId, 50)) }
+        map["screw_3_2"] = screw1CompRel.map { it.copy(fieldId = shiftId(it.fieldId, 50)) }
+        map["cent_1_0"] = centRel
+        map["screw_3_1_0"] = screw3_1_rel
+        map["screw_3_2_0"] = screw3_1_rel.map { it.copy(fieldId = shiftId(it.fieldId, 30)) }
+        map
     }
 
     // ============ 公共方法 ============
@@ -183,7 +197,6 @@ object DeviceOcrStrategy {
         else -> "全组板交"
     }
 
-    // 字段ID偏移工具（特灵+30/+50，约克螺杆+30）
     private fun shiftId(fieldId: String, offset: Int): String {
         val lastUnderscore = fieldId.lastIndexOf("_")
         val prefix = fieldId.substring(0, lastUnderscore + 1)
