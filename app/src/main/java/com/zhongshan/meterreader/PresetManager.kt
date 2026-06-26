@@ -14,23 +14,23 @@ object PresetManager {
         val machineGroup: String
     )
 
-    // 核心修复：坚决移除冷媒压力，新增全部水压和电压。使用 "预估ID|表单中文名" 格式确保容错。
+    // 核心修复：使用与 Web 表单匹配的中文描述
     val allItems = listOf(
-        PresetItem("1号特灵-蒸发器进口水压", "screw_evap_in_p", "field_1_03|蒸发器进水口", "0.45", "trane_screw"),
-        PresetItem("1号特灵-蒸发器出口水压", "screw_evap_out_p", "field_1_04|蒸发器出水口", "0.45", "trane_screw"),
-        PresetItem("1号特灵-冷凝器进口水压", "screw_cond_in_p", "field_1_10|冷凝器进水口", "0.45", "trane_screw"),
-        PresetItem("1号特灵-冷凝器出口水压", "screw_cond_out_p", "field_1_11|冷凝器出水口", "0.45", "trane_screw"),
+        PresetItem("1号特灵-蒸发器进口水压", "screw_evap_in_p", "field_1_03|蒸发器进口水压", "0.45", "trane_screw"),
+        PresetItem("1号特灵-蒸发器出口水压", "screw_evap_out_p", "field_1_04|蒸发器出口水压", "0.45", "trane_screw"),
+        PresetItem("1号特灵-冷凝器进口水压", "screw_cond_in_p", "field_1_10|冷凝器进口水压", "0.45", "trane_screw"),
+        PresetItem("1号特灵-冷凝器出口水压", "screw_cond_out_p", "field_1_11|冷凝器出口水压", "0.45", "trane_screw"),
 
-        PresetItem("1号约克离心-蒸发器进口水压", "cent_evap_in_p", "field_1_90|蒸发器进口", "0.45", "york_cent"),
-        PresetItem("1号约克离心-蒸发器出口水压", "cent_evap_out_p", "field_1_91|蒸发器出口", "0.45", "york_cent"),
-        PresetItem("1号约克离心-冷凝器进口水压", "cent_cond_in_p", "field_1_92|冷凝器进口", "0.45", "york_cent"),
-        PresetItem("1号约克离心-冷凝器出口水压", "cent_cond_out_p", "field_1_93|冷凝器出口", "0.45", "york_cent"),
+        PresetItem("1号约克离心-蒸发器进口水压", "cent_evap_in_p", "field_1_90|蒸发器进口水压", "0.45", "york_cent"),
+        PresetItem("1号约克离心-蒸发器出口水压", "cent_evap_out_p", "field_1_91|蒸发器出口水压", "0.45", "york_cent"),
+        PresetItem("1号约克离心-冷凝器进口水压", "cent_cond_in_p", "field_1_92|冷凝器进口水压", "0.45", "york_cent"),
+        PresetItem("1号约克离心-冷凝器出口水压", "cent_cond_out_p", "field_1_93|冷凝器出口水压", "0.45", "york_cent"),
         PresetItem("1号约克离心-电机电压", "cent_voltage", "field_1_84|电机电压", "380", "york_cent"),
 
-        PresetItem("3号约克螺杆-蒸发器进口水压", "screw3_evap_in_p", "field_3_03|蒸发器进口", "0.45", "york_screw3"),
-        PresetItem("3号约克螺杆-蒸发器出口水压", "screw3_evap_out_p", "field_3_04|蒸发器出口", "0.45", "york_screw3"),
-        PresetItem("3号约克螺杆-冷凝器进口水压", "screw3_cond_in_p", "field_3_10|冷凝器进口", "0.45", "york_screw3"),
-        PresetItem("3号约克螺杆-冷凝器出口水压", "screw3_cond_out_p", "field_3_11|冷凝器出口", "0.45", "york_screw3"),
+        PresetItem("3号约克螺杆-蒸发器进口水压", "screw3_evap_in_p", "field_3_03|蒸发器进口水压", "0.45", "york_screw3"),
+        PresetItem("3号约克螺杆-蒸发器出口水压", "screw3_evap_out_p", "field_3_04|蒸发器出口水压", "0.45", "york_screw3"),
+        PresetItem("3号约克螺杆-冷凝器进口水压", "screw3_cond_in_p", "field_3_10|冷凝器进口水压", "0.45", "york_screw3"),
+        PresetItem("3号约克螺杆-冷凝器出口水压", "screw3_cond_out_p", "field_3_11|冷凝器出口水压", "0.45", "york_screw3"),
         PresetItem("3号约克螺杆-电机电压(1#)", "screw3_volt1", "field_3_19|电机电压", "380", "york_screw3"),
         PresetItem("3号约克螺杆-电机电压(2#)", "screw3_volt2", "field_3_49|电机电压", "380", "york_screw3")
     )
