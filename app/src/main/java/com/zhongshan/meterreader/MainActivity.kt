@@ -150,6 +150,8 @@ class MainActivity : AppCompatActivity() {
             }
 
         binding.btnLaunchCamera.setOnClickListener {
+            // 系统相机无法叠加辅助框，请用户对准屏幕拍摄
+            Toast.makeText(this, "请尽量将机组数据铺满整个屏幕后拍摄", Toast.LENGTH_LONG).show()
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
                 == PackageManager.PERMISSION_GRANTED
             ) {
@@ -180,45 +182,53 @@ class MainActivity : AppCompatActivity() {
                 val cachedData =
                     RecognitionResultHolder.getFieldsForMachine(template.machineId)
                 if (cachedData.isEmpty()) {
-                    Toast.makeText(
-                        this@MainActivity, "暂无采集数据", Toast.LENGTH_SHORT
-                    ).show()
+                    Toast.makeText(this@MainActivity, "暂无采集数据", Toast.LENGTH_SHORT).show()
                     return@launch
                 }
 
                 val finalData = HashMap<String, String>()
+                // 预设值优先放入（后续若有 OCR 真实值则覆盖）
                 finalData.putAll(PresetManager.getPresetsForMachine(template.machineId))
-                finalData.putAll(cachedData)   // OCR 真实值覆盖预设
+                finalData.putAll(cachedData)
 
-                fun getValueByRawId(data: Map<String, String>, rawId: String): String? {
-                    return data.entries.find { it.key.startsWith("$rawId|") || it.key == rawId }?.value
+                // 根据中文标签精确查找数值
+                fun getValueByLabel(data: Map<String, String>, labelName: String): String? {
+                    return data.entries.find { it.key.endsWith("|$labelName") }?.value
                 }
 
-                // ★ 电流计算：提取纯数字（去除 % 等符号）
+                // 自动计算电机电流（约克系列专有逻辑）
+                val loadPctRaw = getValueByLabel(finalData, "压缩机导液开度")
+                if (loadPctRaw != null) {
+                    val cleanPct = loadPctRaw.replace(Regex("[^0-9.]"), "").toFloatOrNull()
+                    if (cleanPct != null) {
+                        if (template.machineId == "cent_1" || template.machineId.startsWith("screw_3_")) {
+                            val current = (cleanPct * 2.5f).roundToInt().toString()
+                            finalData["calc_current|电机电流"] = current
+                        }
+                    }
+                }
+
+                // 补全表单隐藏预设值（水压、电压等，按机房及机型硬编码注入）
                 when (template.machineId) {
+                    "screw_1", "screw_2", "screw_3" -> {
+                        finalData["preset_evap_in_p|蒸发器进口水压"] = "0.45"
+                        finalData["preset_evap_out_p|蒸发器出口水压"] = "0.45"
+                        finalData["preset_cond_in_p|冷凝器进口水压"] = "0.50"
+                        finalData["preset_cond_out_p|冷凝器出口水压"] = "0.50"
+                    }
                     "cent_1" -> {
-                        val raw = getValueByRawId(finalData, "field_1_82")
-                        val clean = raw?.replace(Regex("[^0-9.]"), "")
-                        val loadPct = clean?.toFloatOrNull()
-                        if (loadPct != null) {
-                            finalData["field_1_85|电机电流"] = (loadPct * 2.5f).roundToInt().toString()
-                        }
+                        finalData["preset_evap_in_p|蒸发器进口水压"] = "0.45"
+                        finalData["preset_evap_out_p|蒸发器出口水压"] = "0.45"
+                        finalData["preset_cond_in_p|冷凝器进口水压"] = "0.50"
+                        finalData["preset_cond_out_p|冷凝器出口水压"] = "0.50"
+                        finalData["preset_motor_v|电机电压"] = "10000"
                     }
-                    "screw_3_1" -> {
-                        val raw = getValueByRawId(finalData, "field_3_17")
-                        val clean = raw?.replace(Regex("[^0-9.]"), "")
-                        val loadPct = clean?.toFloatOrNull()
-                        if (loadPct != null) {
-                            finalData["field_3_20|电机电流"] = (loadPct * 2.5f).roundToInt().toString()
-                        }
-                    }
-                    "screw_3_2" -> {
-                        val raw = getValueByRawId(finalData, "field_3_47")
-                        val clean = raw?.replace(Regex("[^0-9.]"), "")
-                        val loadPct = clean?.toFloatOrNull()
-                        if (loadPct != null) {
-                            finalData["field_3_50|电机电流"] = (loadPct * 2.5f).roundToInt().toString()
-                        }
+                    "screw_3_1", "screw_3_2" -> {
+                        finalData["preset_evap_in_p|蒸发器进口水压"] = "0.45"
+                        finalData["preset_evap_out_p|蒸发器出口水压"] = "0.45"
+                        finalData["preset_cond_in_p|冷凝器进口水压"] = "0.50"
+                        finalData["preset_cond_out_p|冷凝器出口水压"] = "0.50"
+                        finalData["preset_motor_v|电机电压"] = "380"
                     }
                 }
 
@@ -229,11 +239,16 @@ class MainActivity : AppCompatActivity() {
                     emptyArray<String>()
                 }
 
+                // ★ 高级修复：将 HashMap 转为绝对绑定的 Entry List，彻底杜绝键值对顺序错位灾难！
+                val exactEntries = finalData.entries.toList()
+                val safeKeys = exactEntries.map { it.key }.toTypedArray()
+                val safeValues = exactEntries.map { it.value }.toTypedArray()
+
                 val intent = Intent(this@MainActivity, WebViewActivity::class.java).apply {
                     putExtra("EXTRA_URL", template.formUrl)
                     putExtra("EXTRA_TAB_NAME", TemplateManager.getTabName(template))
-                    putExtra("EXTRA_KEYS", finalData.keys.toTypedArray())
-                    putExtra("EXTRA_VALUES", finalData.values.toTypedArray())
+                    putExtra("EXTRA_KEYS", safeKeys)       // 使用绝对映射的安全数组
+                    putExtra("EXTRA_VALUES", safeValues)   // 使用绝对映射的安全数组
                     putExtra("EXTRA_PUMP_IDS", pumpIds)
                 }
                 startActivity(intent)
@@ -291,11 +306,12 @@ class MainActivity : AppCompatActivity() {
         val aggregatedData =
             RecognitionResultHolder.getFieldsForMachine(template.machineId)
 
+        // UI 渲染：直接显示切割后的纯中文标签名，彻底抛弃底层 ID 显示
         binding.tvDataPreview.text = aggregatedData.entries
             .sortedBy { it.key }
             .joinToString("\n") { (k, v) ->
-                val label = if (k.contains("|")) k.split("|")[1] else k
-                "  $label：$v"
+                val labelName = if (k.contains("|")) k.split("|")[1] else k
+                "【$labelName】：$v"
             }
 
         val totalScreens = DeviceOcrStrategy.totalScreens(template.machineId)
@@ -317,9 +333,7 @@ class MainActivity : AppCompatActivity() {
             }
             updateScreenProgress()
         } else {
-            Toast.makeText(
-                this, "未识别到有效数据", Toast.LENGTH_SHORT
-            ).show()
+            Toast.makeText(this, "未识别到有效数据，请确保对焦清晰", Toast.LENGTH_SHORT).show()
         }
     }
 
