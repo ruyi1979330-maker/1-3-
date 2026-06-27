@@ -141,8 +141,7 @@ class MainActivity : AppCompatActivity() {
                                 RecognitionResultHolder.clearMachineData(oldMachineId)
                             }
                         }
-                        binding.tvDataPreview.text =
-                            "已切换至 ${newTemplate.displayName}，请重新采集"
+                        binding.tvDataPreview.text = "已切换至 ${newTemplate.displayName}，请重新采集"
                         updateScreenProgress()
                     }
                 }
@@ -150,8 +149,7 @@ class MainActivity : AppCompatActivity() {
             }
 
         binding.btnLaunchCamera.setOnClickListener {
-            // 系统相机无法叠加辅助框，请用户对准屏幕拍摄
-            Toast.makeText(this, "请尽量将机组数据铺满整个屏幕后拍摄", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "请将机组数据铺满屏幕后拍摄", Toast.LENGTH_LONG).show()
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
                 == PackageManager.PERMISSION_GRANTED
             ) {
@@ -176,27 +174,32 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // 长按推送填表按钮导出日志
+        binding.btnTransferAndFill.setOnLongClickListener {
+            DebugLogger.saveAndShare(this@MainActivity)
+            Toast.makeText(this, "日志已导出，请通过分享发送给开发者", Toast.LENGTH_LONG).show()
+            true
+        }
+
         binding.btnTransferAndFill.setOnClickListener {
             val template = selectedTemplate ?: return@setOnClickListener
             lifecycleScope.launch {
-                val cachedData =
-                    RecognitionResultHolder.getFieldsForMachine(template.machineId)
+                val cachedData = RecognitionResultHolder.getFieldsForMachine(template.machineId)
+                DebugLogger.log("MainActivity", "推送前缓存数据 (machineId=${template.machineId}): $cachedData")
+
                 if (cachedData.isEmpty()) {
                     Toast.makeText(this@MainActivity, "暂无采集数据", Toast.LENGTH_SHORT).show()
                     return@launch
                 }
 
                 val finalData = HashMap<String, String>()
-                // 预设值优先放入（后续若有 OCR 真实值则覆盖）
                 finalData.putAll(PresetManager.getPresetsForMachine(template.machineId))
                 finalData.putAll(cachedData)
 
-                // 根据中文标签精确查找数值
                 fun getValueByLabel(data: Map<String, String>, labelName: String): String? {
                     return data.entries.find { it.key.endsWith("|$labelName") }?.value
                 }
 
-                // 自动计算电机电流（约克系列专有逻辑）
                 val loadPctRaw = getValueByLabel(finalData, "压缩机导液开度")
                 if (loadPctRaw != null) {
                     val cleanPct = loadPctRaw.replace(Regex("[^0-9.]"), "").toFloatOrNull()
@@ -208,7 +211,6 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                // 补全表单隐藏预设值（水压、电压等，按机房及机型硬编码注入）
                 when (template.machineId) {
                     "screw_1", "screw_2", "screw_3" -> {
                         finalData["preset_evap_in_p|蒸发器进口水压"] = "0.45"
@@ -232,6 +234,8 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
+                DebugLogger.log("MainActivity", "最终推送数据 (machineId=${template.machineId}): $finalData")
+
                 val pumpIds = try {
                     val method = template.javaClass.getMethod("getPumpFieldIds")
                     (method.invoke(template) as? List<*>)?.map { it.toString() }?.toTypedArray() ?: emptyArray()
@@ -239,16 +243,18 @@ class MainActivity : AppCompatActivity() {
                     emptyArray<String>()
                 }
 
-                // ★ 高级修复：将 HashMap 转为绝对绑定的 Entry List，彻底杜绝键值对顺序错位灾难！
                 val exactEntries = finalData.entries.toList()
                 val safeKeys = exactEntries.map { it.key }.toTypedArray()
                 val safeValues = exactEntries.map { it.value }.toTypedArray()
 
+                DebugLogger.log("MainActivity", "Keys: ${safeKeys.joinToString()}")
+                DebugLogger.log("MainActivity", "Values: ${safeValues.joinToString()}")
+
                 val intent = Intent(this@MainActivity, WebViewActivity::class.java).apply {
                     putExtra("EXTRA_URL", template.formUrl)
                     putExtra("EXTRA_TAB_NAME", TemplateManager.getTabName(template))
-                    putExtra("EXTRA_KEYS", safeKeys)       // 使用绝对映射的安全数组
-                    putExtra("EXTRA_VALUES", safeValues)   // 使用绝对映射的安全数组
+                    putExtra("EXTRA_KEYS", safeKeys)
+                    putExtra("EXTRA_VALUES", safeValues)
                     putExtra("EXTRA_PUMP_IDS", pumpIds)
                 }
                 startActivity(intent)
@@ -266,12 +272,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun launchCamera() {
-        val fileName =
-            "IMG_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}.jpg"
+        val fileName = "IMG_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}.jpg"
         pendingPhotoFileName = fileName
         val photoFile = File(cacheDir, fileName)
-        pendingCameraUri =
-            FileProvider.getUriForFile(this, "$packageName.fileprovider", photoFile)
+        pendingCameraUri = FileProvider.getUriForFile(this, "$packageName.fileprovider", photoFile)
         cameraLauncher.launch(pendingCameraUri!!)
     }
 
@@ -295,18 +299,19 @@ class MainActivity : AppCompatActivity() {
 
     private suspend fun processImageSuspend(uri: Uri, source: ImageSource) {
         val template = selectedTemplate ?: return
-        val result = OCRFacade.performSmartOcr(
-            this, uri, template, currentScreenIndex, source
-        )
+        DebugLogger.log("OCR", "开始识别: machineId=${template.machineId}, screenIndex=$currentScreenIndex, source=$source")
+
+        val result = OCRFacade.performSmartOcr(this, uri, template, currentScreenIndex, source)
+
+        DebugLogger.log("OCR", "识别结果: $result")
 
         if (result.isNotEmpty()) {
             RecognitionResultHolder.saveFieldsForMachine(template.machineId, result)
         }
 
-        val aggregatedData =
-            RecognitionResultHolder.getFieldsForMachine(template.machineId)
+        val aggregatedData = RecognitionResultHolder.getFieldsForMachine(template.machineId)
+        DebugLogger.log("OCR", "聚合数据: $aggregatedData")
 
-        // UI 渲染：直接显示切割后的纯中文标签名，彻底抛弃底层 ID 显示
         binding.tvDataPreview.text = aggregatedData.entries
             .sortedBy { it.key }
             .joinToString("\n") { (k, v) ->
@@ -319,28 +324,19 @@ class MainActivity : AppCompatActivity() {
         if (result.isNotEmpty()) {
             if (!template.isHeatExchanger && currentScreenIndex < totalScreens - 1) {
                 currentScreenIndex++
-                Toast.makeText(
-                    this,
-                    "第${currentScreenIndex}屏采集成功，请拍摄下一屏",
-                    Toast.LENGTH_SHORT
-                ).show()
+                Toast.makeText(this, "第${currentScreenIndex}屏采集成功，请拍摄下一屏", Toast.LENGTH_SHORT).show()
             } else {
-                Toast.makeText(
-                    this,
-                    "设备全部数据已采集完成！",
-                    Toast.LENGTH_LONG
-                ).show()
+                Toast.makeText(this, "设备全部数据已采集完成！", Toast.LENGTH_LONG).show()
             }
             updateScreenProgress()
         } else {
-            Toast.makeText(this, "未识别到有效数据，请确保对焦清晰", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "未识别到有效数据", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun updateScreenProgress() {
         val template = selectedTemplate ?: return
         val total = DeviceOcrStrategy.totalScreens(template.machineId)
-        
         if (template.isHeatExchanger || total <= 1) {
             binding.btnLaunchCamera.text = "📷 现场拍照"
             return
