@@ -40,6 +40,7 @@ class WebViewActivity : AppCompatActivity() {
         fun onFillComplete(count: Int) {
             ref.get()?.runOnUiThread {
                 val act = ref.get() ?: return@runOnUiThread
+                DebugLogger.log("WebView", "JS 报告填表完成，成功填充 $count 个字段")
                 act.binding.tvStatusBanner.visibility = View.VISIBLE
                 if (count > 0) {
                     act.binding.tvStatusBanner.text = "✅ 自动填表引擎就绪！已成功秒填 $count 个数据。"
@@ -52,6 +53,7 @@ class WebViewActivity : AppCompatActivity() {
         @JavascriptInterface
         fun log(msg: String) {
             Log.d("WebViewJS", msg)
+            DebugLogger.log("WebView-JS", msg)
         }
     }
 
@@ -123,7 +125,6 @@ class WebViewActivity : AppCompatActivity() {
                 }
             }
             override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
-                // 仅允许受信内网证书，正式发布时需固定指纹
                 handler?.proceed()
             }
         }
@@ -167,7 +168,6 @@ class WebViewActivity : AppCompatActivity() {
             document.head.appendChild(style);
         """)
 
-        // 数据注入
         sb.append("var targetData = [];\n")
         for (i in keys.indices) {
             val parts = keys[i].split("|")
@@ -177,7 +177,6 @@ class WebViewActivity : AppCompatActivity() {
             sb.append("targetData.push({id:'$fid', label:'$label', v:'$v'});\n")
         }
 
-        // 核心逻辑
         sb.append("""
             function getLabelText(item) {
                 return item.label.replace(/\s+/g, '').replace(/[（(].*?[)）]/g, '');
@@ -208,27 +207,30 @@ class WebViewActivity : AppCompatActivity() {
 
             function findInput(item){
                 var el = document.getElementById(item.id) || document.querySelector('[name="'+item.id+'"]');
-                if(el && isValidInput(el)) return el;
+                if(el && isValidInput(el)) {
+                    AndroidBridge.log('通过ID/Name找到输入框: ' + item.label);
+                    return el;
+                }
                 if(!item.label) return null;
                 
                 var cleanLabel = getLabelText(item);
                 var variants = getLabelVariants(cleanLabel);
-                // 仅扫描尚未填充的 input，降低性能消耗
                 var allInputs = document.querySelectorAll('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])');
 
-                // 1. Placeholder 嗅探
                 for(var i=0; i<allInputs.length; i++){
                     var inp = allInputs[i];
                     if(!isValidInput(inp)) continue;
                     var ph = (inp.placeholder || '').replace(/\s+/g, '');
                     if(ph) {
                         for(var v=0; v<variants.length; v++){
-                            if(ph.indexOf(variants[v]) > -1) return inp;
+                            if(ph.indexOf(variants[v]) > -1) {
+                                AndroidBridge.log('通过placeholder找到输入框: ' + item.label);
+                                return inp;
+                            }
                         }
                     }
                 }
 
-                // 2. 表格列映射
                 var allThs = document.querySelectorAll('th, .el-table__header th, td');
                 for(var i=0; i<allThs.length; i++) {
                     var th = allThs[i];
@@ -246,14 +248,16 @@ class WebViewActivity : AppCompatActivity() {
                                 var cells = rows[r].children;
                                 if(cells[colIndex]) {
                                     var input = cells[colIndex].querySelector('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])');
-                                    if(input && isValidInput(input)) return input;
+                                    if(input && isValidInput(input)) {
+                                        AndroidBridge.log('通过表格列映射找到输入框: ' + item.label);
+                                        return input;
+                                    }
                                 }
                             }
                         }
                     }
                 }
 
-                // 3. 全局邻近搜索
                 var textElements = document.querySelectorAll('span, td, div, p, label');
                 for(var i=0; i<textElements.length; i++){
                     var node = textElements[i];
@@ -263,11 +267,17 @@ class WebViewActivity : AppCompatActivity() {
                     for(var v=0; v<variants.length; v++){
                         if(text.indexOf(variants[v]) > -1 || variants[v].indexOf(text) > -1){
                             var input = node.querySelector('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])');
-                            if(input && isValidInput(input)) return input;
+                            if(input && isValidInput(input)) {
+                                AndroidBridge.log('通过文本邻近找到输入框: ' + item.label);
+                                return input;
+                            }
                             var sibling = node.nextElementSibling;
                             while(sibling){
                                 input = sibling.querySelector('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])') || (sibling.tagName==='INPUT'?sibling:null);
-                                if(input && isValidInput(input)) return input;
+                                if(input && isValidInput(input)) {
+                                    AndroidBridge.log('通过兄弟元素找到输入框: ' + item.label);
+                                    return input;
+                                }
                                 sibling = sibling.nextElementSibling;
                             }
                             var parent = node.parentElement;
@@ -276,12 +286,18 @@ class WebViewActivity : AppCompatActivity() {
                                 var pSibling = parent.nextElementSibling;
                                 while(pSibling){
                                     input = pSibling.querySelector('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])') || (pSibling.tagName==='INPUT'?pSibling:null);
-                                    if(input && isValidInput(input)) return input;
+                                    if(input && isValidInput(input)) {
+                                        AndroidBridge.log('通过父级兄弟找到输入框: ' + item.label);
+                                        return input;
+                                    }
                                     pSibling = pSibling.nextElementSibling;
                                 }
                                 var parentInputs = parent.querySelectorAll('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])');
                                 for(var k=0; k<parentInputs.length; k++){
-                                    if(isValidInput(parentInputs[k])) return parentInputs[k];
+                                    if(isValidInput(parentInputs[k])) {
+                                        AndroidBridge.log('通过父级容器找到输入框: ' + item.label);
+                                        return parentInputs[k];
+                                    }
                                 }
                                 parent = parent.parentElement;
                                 depth++;
@@ -289,18 +305,16 @@ class WebViewActivity : AppCompatActivity() {
                         }
                     }
                 }
+                AndroidBridge.log('未找到输入框: ' + item.label + ' (ID: ' + item.id + ')');
                 return null;
             }
 
-            // 原型 Setter 穿透
             function triggerNativeSetter(el, valStr) {
                 el.removeAttribute('readonly');
                 el.removeAttribute('disabled');
-                
                 var proto = Object.getPrototypeOf(el);
                 var protoSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
                 var ownSetter = Object.getOwnPropertyDescriptor(el, 'value')?.set;
-
                 if (protoSetter && ownSetter !== protoSetter) {
                     protoSetter.call(el, valStr);
                 } else if (ownSetter) {
@@ -308,7 +322,6 @@ class WebViewActivity : AppCompatActivity() {
                 } else {
                     el.value = valStr;
                 }
-
                 el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
                 el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
             }
@@ -316,9 +329,7 @@ class WebViewActivity : AppCompatActivity() {
             function getNativeValue(el) {
                 var proto = Object.getPrototypeOf(el);
                 var getter = Object.getOwnPropertyDescriptor(proto, 'value')?.get;
-                if (getter) {
-                    return getter.call(el);
-                }
+                if (getter) { return getter.call(el); }
                 return el.value;
             }
 
@@ -330,7 +341,6 @@ class WebViewActivity : AppCompatActivity() {
                 el.setAttribute('data-ocr-filled', valStr);
             }
 
-            // 页面就绪检测：跳过加载蒙层
             function isPageReady() {
                 return document.querySelectorAll('.el-loading-mask, .ant-spin-container, .loading-mask').length === 0;
             }
@@ -338,8 +348,7 @@ class WebViewActivity : AppCompatActivity() {
             window.__ocrLastFilledCount = -1;
             
             function scanAndAutofillEngine(){
-                if (!isPageReady()) return;  // 等待加载完成
-                
+                if (!isPageReady()) return;
                 var currentFilled = 0;
                 for(var i=0; i<targetData.length; i++){
                     var item = targetData[i];
@@ -348,9 +357,9 @@ class WebViewActivity : AppCompatActivity() {
                         var valStr = item.v.toString();
                         var nativeVal = getNativeValue(el);
                         var currentVal = nativeVal ? nativeVal.toString() : '';
-                        
                         if (currentVal !== valStr && el.getAttribute('data-ocr-filled') !== valStr) {
                             forceSetValue(el, item.v);
+                            AndroidBridge.log('填入值: ' + item.label + ' = ' + valStr);
                         }
                         if (nativeVal?.toString() === valStr || el.getAttribute('data-ocr-filled') === valStr) {
                             currentFilled++;
@@ -359,7 +368,6 @@ class WebViewActivity : AppCompatActivity() {
                 }
         """)
 
-        // 复选框处理
         for (pid in pumpIds) {
             val safePid = pid.esc()
             sb.append("""
@@ -391,9 +399,10 @@ class WebViewActivity : AppCompatActivity() {
 
             setInterval(scanAndAutofillEngine, $AUTO_SCAN_INTERVAL_MS);
             scanAndAutofillEngine();
+            // 全局失焦，避免截图时残留焦点边框
+            setTimeout(function(){ if(document.activeElement) document.activeElement.blur(); }, 1000);
         })();
         """)
-
         return sb.toString()
     }
 
