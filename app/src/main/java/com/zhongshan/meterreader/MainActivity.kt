@@ -174,7 +174,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 长按推送填表按钮导出日志
         binding.btnTransferAndFill.setOnLongClickListener {
             DebugLogger.saveAndShare(this@MainActivity)
             Toast.makeText(this, "日志已导出，请通过分享发送给开发者", Toast.LENGTH_LONG).show()
@@ -192,8 +191,32 @@ class MainActivity : AppCompatActivity() {
                     return@launch
                 }
 
+                // 推断当前机组的数字前缀，用于给预设值字段添加前缀
+                val machineNumPrefix = when (template.machineId) {
+                    "screw_1", "cent_1" -> "1#"
+                    "screw_2" -> "2#"
+                    "screw_3" -> "3#"
+                    "screw_3_1" -> "1#"
+                    "screw_3_2" -> "2#"
+                    else -> ""
+                }
+
                 val finalData = HashMap<String, String>()
-                finalData.putAll(PresetManager.getPresetsForMachine(template.machineId))
+                // 先放入预设值，并给 label 加上前缀
+                val presets = PresetManager.getPresetsForMachine(template.machineId)
+                for ((fieldId, value) in presets) {
+                    // fieldId 格式如 "field_1_03|蒸发器进口水压"
+                    val parts = fieldId.split("|")
+                    if (parts.size == 2) {
+                        val labelWithPrefix = if (machineNumPrefix.isNotEmpty() && !parts[1].startsWith(machineNumPrefix)) {
+                            "${machineNumPrefix}${parts[1]}"
+                        } else parts[1]
+                        finalData["${parts[0]}|$labelWithPrefix"] = value
+                    } else {
+                        finalData[fieldId] = value
+                    }
+                }
+                // 再放入 OCR 数据
                 finalData.putAll(cachedData)
 
                 fun getValueByLabel(data: Map<String, String>, labelName: String): String? {
@@ -206,33 +229,13 @@ class MainActivity : AppCompatActivity() {
                     if (cleanPct != null) {
                         if (template.machineId == "cent_1" || template.machineId.startsWith("screw_3_")) {
                             val current = (cleanPct * 2.5f).roundToInt().toString()
-                            finalData["calc_current|电机电流"] = current
+                            finalData["calc_current|${machineNumPrefix}电机电流"] = current
                         }
                     }
                 }
 
-                when (template.machineId) {
-                    "screw_1", "screw_2", "screw_3" -> {
-                        finalData["preset_evap_in_p|蒸发器进口水压"] = "0.45"
-                        finalData["preset_evap_out_p|蒸发器出口水压"] = "0.45"
-                        finalData["preset_cond_in_p|冷凝器进口水压"] = "0.50"
-                        finalData["preset_cond_out_p|冷凝器出口水压"] = "0.50"
-                    }
-                    "cent_1" -> {
-                        finalData["preset_evap_in_p|蒸发器进口水压"] = "0.45"
-                        finalData["preset_evap_out_p|蒸发器出口水压"] = "0.45"
-                        finalData["preset_cond_in_p|冷凝器进口水压"] = "0.50"
-                        finalData["preset_cond_out_p|冷凝器出口水压"] = "0.50"
-                        finalData["preset_motor_v|电机电压"] = "10000"
-                    }
-                    "screw_3_1", "screw_3_2" -> {
-                        finalData["preset_evap_in_p|蒸发器进口水压"] = "0.45"
-                        finalData["preset_evap_out_p|蒸发器出口水压"] = "0.45"
-                        finalData["preset_cond_in_p|冷凝器进口水压"] = "0.50"
-                        finalData["preset_cond_out_p|冷凝器出口水压"] = "0.50"
-                        finalData["preset_motor_v|电机电压"] = "380"
-                    }
-                }
+                // 移除可能重复的老的预设值字段（无前缀），保留新 key
+                // 这一步非必须，因为我们已覆盖，但为了安全可以不清除
 
                 DebugLogger.log("MainActivity", "最终推送数据 (machineId=${template.machineId}): $finalData")
 
