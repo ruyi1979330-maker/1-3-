@@ -179,9 +179,9 @@ class WebViewActivity : AppCompatActivity() {
 
         sb.append("""
             function getLabelText(item) {
-                return item.label.replace(/\s+/g, '').replace(/[（(].*?[)）]/g, '');
+                return item.label.replace(/\\s+/g, '').replace(/[（(].*?[)）]/g, '');
             }
-            
+
             function getLabelVariants(label) {
                 var variants = [label];
                 if(label.indexOf('进水') > -1) variants.push(label.replace('进水','进口'));
@@ -192,7 +192,7 @@ class WebViewActivity : AppCompatActivity() {
                 if(label.indexOf('回水') > -1) variants.push(label.replace('回水','返回'));
                 return variants;
             }
-            
+
             function isValidInput(el){
                 if(!el) return false;
                 var tag = (el.tagName || '').toUpperCase();
@@ -205,6 +205,12 @@ class WebViewActivity : AppCompatActivity() {
                 return true;
             }
 
+            // 从标签中提取机组号（如 "1#蒸发器进口水温" -> "1#"）
+            function extractMachinePrefix(label) {
+                var m = label.match(/^(\\d+#)/);
+                return m ? m[1] : null;
+            }
+
             function findInput(item){
                 var el = document.getElementById(item.id) || document.querySelector('[name="'+item.id+'"]');
                 if(el && isValidInput(el)) {
@@ -212,15 +218,18 @@ class WebViewActivity : AppCompatActivity() {
                     return el;
                 }
                 if(!item.label) return null;
-                
+
                 var cleanLabel = getLabelText(item);
                 var variants = getLabelVariants(cleanLabel);
-                var allInputs = document.querySelectorAll('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])');
+                var machinePrefix = extractMachinePrefix(cleanLabel);
+                var coreLabel = machinePrefix ? cleanLabel.substring(machinePrefix.length) : cleanLabel;
 
+                // 1. placeholder 嗅探
+                var allInputs = document.querySelectorAll('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])');
                 for(var i=0; i<allInputs.length; i++){
                     var inp = allInputs[i];
                     if(!isValidInput(inp)) continue;
-                    var ph = (inp.placeholder || '').replace(/\s+/g, '');
+                    var ph = (inp.placeholder || '').replace(/\\s+/g, '');
                     if(ph) {
                         for(var v=0; v<variants.length; v++){
                             if(ph.indexOf(variants[v]) > -1) {
@@ -231,38 +240,50 @@ class WebViewActivity : AppCompatActivity() {
                     }
                 }
 
-                var allThs = document.querySelectorAll('th, .el-table__header th, td');
-                for(var i=0; i<allThs.length; i++) {
-                    var th = allThs[i];
-                    var thText = (th.innerText || th.textContent || '').replace(/\s+/g, '');
-                    for(var v=0; v<variants.length; v++){
-                        if(thText.indexOf(variants[v]) > -1 || variants[v].indexOf(thText) > -1) {
-                            var colIndex = th.cellIndex !== undefined ? th.cellIndex : 0;
-                            if(colIndex === 0) {
-                                var sib = th.previousElementSibling;
-                                while(sib){ colIndex++; sib = sib.previousElementSibling; }
+                // 2. 表格列映射（带机组行定位）
+                var allTables = document.querySelectorAll('table, .el-table');
+                for(var t=0; t<allTables.length; t++){
+                    var table = allTables[t];
+                    var ths = table.querySelectorAll('th');
+                    var colIndex = -1;
+                    for(var h=0; h<ths.length; h++){
+                        var thText = (ths[h].innerText || ths[h].textContent || '').replace(/\\s+/g, '');
+                        for(var v=0; v<variants.length; v++){
+                            if(thText.indexOf(variants[v]) > -1 || variants[v].indexOf(thText) > -1){
+                                colIndex = ths[h].cellIndex;
+                                break;
                             }
-                            var tableRoot = th.closest('table, .el-table') || document.body;
-                            var rows = tableRoot.querySelectorAll('tbody tr, .el-table__row');
-                            for(var r=0; r<rows.length; r++){
-                                var cells = rows[r].children;
-                                if(cells[colIndex]) {
-                                    var input = cells[colIndex].querySelector('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])');
-                                    if(input && isValidInput(input)) {
-                                        AndroidBridge.log('通过表格列映射找到输入框: ' + item.label);
-                                        return input;
-                                    }
+                        }
+                        if(colIndex > -1) break;
+                    }
+                    if(colIndex > -1){
+                        var rows = table.querySelectorAll('tbody tr, .el-table__row');
+                        for(var r=0; r<rows.length; r++){
+                            var row = rows[r];
+                            if(machinePrefix){
+                                // 需要匹配机组号：检查该行第一个单元格或整行文本是否包含机组前缀
+                                var firstCell = row.cells ? row.cells[0] : null;
+                                var rowIdentifier = firstCell ? (firstCell.innerText || firstCell.textContent || '').replace(/\\s+/g, '') : (row.innerText || row.textContent || '').replace(/\\s+/g, '');
+                                if(rowIdentifier.indexOf(machinePrefix) === -1) continue; // 跳过不匹配的行
+                            }
+                            var cells = row.cells;
+                            if(cells && cells[colIndex]){
+                                var input = cells[colIndex].querySelector('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])');
+                                if(input && isValidInput(input)) {
+                                    AndroidBridge.log('通过表格列映射找到输入框: ' + item.label);
+                                    return input;
                                 }
                             }
                         }
                     }
                 }
 
+                // 3. 全局邻近搜索（不使用data-ocr-filled过滤以支持重新定位）
                 var textElements = document.querySelectorAll('span, td, div, p, label');
                 for(var i=0; i<textElements.length; i++){
                     var node = textElements[i];
                     if(node.children.length > 3) continue;
-                    var text = (node.innerText || node.textContent || '').replace(/\s+/g, '');
+                    var text = (node.innerText || node.textContent || '').replace(/\\s+/g, '');
                     if(!text) continue;
                     for(var v=0; v<variants.length; v++){
                         if(text.indexOf(variants[v]) > -1 || variants[v].indexOf(text) > -1){
@@ -368,6 +389,7 @@ class WebViewActivity : AppCompatActivity() {
                 }
         """)
 
+        // 复选框注入
         for (pid in pumpIds) {
             val safePid = pid.esc()
             sb.append("""
@@ -399,7 +421,6 @@ class WebViewActivity : AppCompatActivity() {
 
             setInterval(scanAndAutofillEngine, $AUTO_SCAN_INTERVAL_MS);
             scanAndAutofillEngine();
-            // 全局失焦，避免截图时残留焦点边框
             setTimeout(function(){ if(document.activeElement) document.activeElement.blur(); }, 1000);
         })();
         """)
