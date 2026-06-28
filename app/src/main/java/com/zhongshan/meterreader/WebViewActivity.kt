@@ -177,20 +177,83 @@ class WebViewActivity : AppCompatActivity() {
             sb.append("targetData.push({id:'$fid', label:'$label', v:'$v'});\n")
         }
 
+        // 推断主流机组前缀
+        sb.append("""
+            var dominantMachinePrefix = null;
+            var prefixCount = {};
+            for(var i=0; i<targetData.length; i++){
+                var m = targetData[i].label.match(/^(\\d+#)/);
+                if(m){
+                    var p = m[1];
+                    prefixCount[p] = (prefixCount[p]||0)+1;
+                }
+            }
+            var maxCount = 0;
+            for(var p in prefixCount){
+                if(prefixCount[p] > maxCount){
+                    maxCount = prefixCount[p];
+                    dominantMachinePrefix = p;
+                }
+            }
+            AndroidBridge.log('主流机组前缀: ' + dominantMachinePrefix);
+        """)
+
         sb.append("""
             function getLabelText(item) {
-                return item.label.replace(/\\s+/g, '').replace(/[（(].*?[)）]/g, '');
+                var t = item.label.replace(/\\s+/g, '')
+                                   .replace(/[（(].*?[)）]/g, '')
+                                   .replace(/[【\\[].*?[\\]】]/g, '');
+                t = t.replace(/[：:]/g, '').replace(/[，,]/g, '');
+                return t;
             }
 
             function getLabelVariants(label) {
-                var variants = [label];
-                if(label.indexOf('进水') > -1) variants.push(label.replace('进水','进口'));
-                if(label.indexOf('进口') > -1) variants.push(label.replace('进口','进水'));
-                if(label.indexOf('出水') > -1) variants.push(label.replace('出水','出口'));
-                if(label.indexOf('出口') > -1) variants.push(label.replace('出口','出水'));
-                if(label.indexOf('返回') > -1) variants.push(label.replace('返回','回水'));
-                if(label.indexOf('回水') > -1) variants.push(label.replace('回水','返回'));
-                return variants;
+                var base = getLabelText({label: label});
+                var variants = [base];
+                if(base.indexOf('进水') > -1) variants.push(base.replace('进水','进口'));
+                if(base.indexOf('进口') > -1) variants.push(base.replace('进口','进水'));
+                if(base.indexOf('出水') > -1) variants.push(base.replace('出水','出口'));
+                if(base.indexOf('出口') > -1) variants.push(base.replace('出口','出水'));
+                if(base.indexOf('返回') > -1) variants.push(base.replace('返回','回水'));
+                if(base.indexOf('回水') > -1) variants.push(base.replace('回水','返回'));
+                if(base.indexOf('冷媒') > -1) variants.push(base.replace('冷媒','制冷剂'));
+                if(base.indexOf('制冷剂') > -1) variants.push(base.replace('制冷剂','冷媒'));
+                if(base.indexOf('压力') > -1) variants.push(base.replace('压力','压强'));
+                if(base.indexOf('温度') > -1) variants.push(base.replace('温度','温'));
+                if(base.indexOf('排口') > -1) { variants.push(base.replace('排口','排出口')); variants.push(base.replace('排口','排出')); }
+                if(base.indexOf('排出口') > -1) { variants.push(base.replace('排出口','排口')); variants.push(base.replace('排出口','排出')); }
+                if(base.indexOf('排出') > -1) { variants.push(base.replace('排出','排口')); variants.push(base.replace('排出','排出口')); }
+                if(base.indexOf('导液开度') > -1) variants.push(base.replace('导液开度','滑阀位置'));
+                if(base.indexOf('滑阀位置') > -1) variants.push(base.replace('滑阀位置','导液开度'));
+                if(base.indexOf('主机负载') > -1) variants.push(base.replace('主机负载','%RLA'));
+                if(base.indexOf('油压') > -1 && base.indexOf('油压差') === -1) variants.push(base.replace('油压','油压差'));
+                if(base.indexOf('油压差') > -1) variants.push(base.replace('油压差','油压'));
+                if(base.indexOf('油箱温度') > -1) { variants.push(base.replace('油箱温度','油槽温度')); variants.push(base.replace('油箱温度','油温')); }
+                if(base.indexOf('油槽温度') > -1) { variants.push(base.replace('油槽温度','油箱温度')); variants.push(base.replace('油槽温度','油温')); }
+                if(base.indexOf('油温') > -1) { variants.push(base.replace('油温','油箱温度')); variants.push(base.replace('油温','油槽温度')); }
+                if(base.indexOf('蒸发温度') > -1) variants.push(base.replace('蒸发温度','蒸发器饱和温度'));
+                if(base.indexOf('饱和温度') > -1) {
+                    if(base.indexOf('蒸发') > -1) variants.push(base.replace('蒸发器饱和温度','蒸发温度'));
+                    if(base.indexOf('冷凝') > -1) variants.push(base.replace('冷凝器饱和温度','冷凝温度'));
+                }
+                if(base.indexOf('冷凝温度') > -1) variants.push(base.replace('冷凝温度','冷凝器饱和温度'));
+                if(base.indexOf('电机电流') > -1) variants.push(base.replace('电机电流','电流'));
+                if(base.indexOf('排出口温度') > -1) variants.push(base.replace('排出口温度','排出端冷剂温度'));
+                if(!(/^\\d+#/).test(base) && dominantMachinePrefix){
+                    variants.push(dominantMachinePrefix + base);
+                    var withPrefix = [];
+                    for(var v=0; v<variants.length; v++){
+                        if(!(/^\\d+#/).test(variants[v])){
+                            withPrefix.push(dominantMachinePrefix + variants[v]);
+                        }
+                    }
+                    variants = variants.concat(withPrefix);
+                }
+                var unique = [];
+                for(var i=0; i<variants.length; i++){
+                    if(unique.indexOf(variants[i]) === -1) unique.push(variants[i]);
+                }
+                return unique;
             }
 
             function isValidInput(el){
@@ -200,14 +263,13 @@ class WebViewActivity : AppCompatActivity() {
                 var type = (el.type || '').toLowerCase();
                 if(['checkbox', 'radio', 'hidden', 'button', 'submit', 'file'].indexOf(type) > -1) return false;
                 if(el.readOnly || el.disabled) return false;
-                if(el.closest && (el.closest('thead') || el.closest('.el-table__header-wrapper'))) return false;
+                // 不排除 thead 中的可能用于筛选的输入框，交由上层逻辑判断
                 if(el.offsetWidth === 0 && el.offsetHeight === 0) return false;
                 return true;
             }
 
-            // 从标签中提取机组号（如 "1#蒸发器进口水温" -> "1#"）
-            function extractMachinePrefix(label) {
-                var m = label.match(/^(\\d+#)/);
+            function extractMachinePrefix(text) {
+                var m = text.match(/^(\\d+#)/);
                 return m ? m[1] : null;
             }
 
@@ -220,11 +282,13 @@ class WebViewActivity : AppCompatActivity() {
                 if(!item.label) return null;
 
                 var cleanLabel = getLabelText(item);
-                var variants = getLabelVariants(cleanLabel);
-                var machinePrefix = extractMachinePrefix(cleanLabel);
-                var coreLabel = machinePrefix ? cleanLabel.substring(machinePrefix.length) : cleanLabel;
+                var variants = getLabelVariants(item.label);
+                var machinePrefix = extractMachinePrefix(cleanLabel) || dominantMachinePrefix;
+                var coreLabel = machinePrefix && cleanLabel.indexOf(machinePrefix)===0 ? cleanLabel.substring(machinePrefix.length) : cleanLabel;
 
-                // 1. placeholder 嗅探
+                AndroidBridge.log('查找: ' + item.label + ' core=' + coreLabel + ' prefix=' + machinePrefix);
+
+                // placeholder 嗅探
                 var allInputs = document.querySelectorAll('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])');
                 for(var i=0; i<allInputs.length; i++){
                     var inp = allInputs[i];
@@ -232,15 +296,15 @@ class WebViewActivity : AppCompatActivity() {
                     var ph = (inp.placeholder || '').replace(/\\s+/g, '');
                     if(ph) {
                         for(var v=0; v<variants.length; v++){
-                            if(ph.indexOf(variants[v]) > -1) {
-                                AndroidBridge.log('通过placeholder找到输入框: ' + item.label);
+                            if(ph.indexOf(variants[v]) > -1 || variants[v].indexOf(ph) > -1) {
+                                AndroidBridge.log('placeholder匹配: ' + item.label);
                                 return inp;
                             }
                         }
                     }
                 }
 
-                // 2. 表格列映射（带机组行定位）
+                // 表格列映射
                 var allTables = document.querySelectorAll('table, .el-table');
                 for(var t=0; t<allTables.length; t++){
                     var table = allTables[t];
@@ -261,16 +325,15 @@ class WebViewActivity : AppCompatActivity() {
                         for(var r=0; r<rows.length; r++){
                             var row = rows[r];
                             if(machinePrefix){
-                                // 需要匹配机组号：检查该行第一个单元格或整行文本是否包含机组前缀
                                 var firstCell = row.cells ? row.cells[0] : null;
                                 var rowIdentifier = firstCell ? (firstCell.innerText || firstCell.textContent || '').replace(/\\s+/g, '') : (row.innerText || row.textContent || '').replace(/\\s+/g, '');
-                                if(rowIdentifier.indexOf(machinePrefix) === -1) continue; // 跳过不匹配的行
+                                if(rowIdentifier.indexOf(machinePrefix) === -1) continue;
                             }
                             var cells = row.cells;
                             if(cells && cells[colIndex]){
                                 var input = cells[colIndex].querySelector('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])');
                                 if(input && isValidInput(input)) {
-                                    AndroidBridge.log('通过表格列映射找到输入框: ' + item.label);
+                                    AndroidBridge.log('表格定位: ' + item.label);
                                     return input;
                                 }
                             }
@@ -278,47 +341,34 @@ class WebViewActivity : AppCompatActivity() {
                     }
                 }
 
-                // 3. 全局邻近搜索（不使用data-ocr-filled过滤以支持重新定位）
-                var textElements = document.querySelectorAll('span, td, div, p, label');
+                // 全局邻近搜索（增加 el-form-item 支持）
+                var textElements = document.querySelectorAll('span, td, div, p, label, .el-form-item__label');
                 for(var i=0; i<textElements.length; i++){
                     var node = textElements[i];
-                    if(node.children.length > 3) continue;
                     var text = (node.innerText || node.textContent || '').replace(/\\s+/g, '');
                     if(!text) continue;
                     for(var v=0; v<variants.length; v++){
                         if(text.indexOf(variants[v]) > -1 || variants[v].indexOf(text) > -1){
                             var input = node.querySelector('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])');
-                            if(input && isValidInput(input)) {
-                                AndroidBridge.log('通过文本邻近找到输入框: ' + item.label);
-                                return input;
-                            }
+                            if(input && isValidInput(input)) { AndroidBridge.log('自身查找: ' + item.label); return input; }
                             var sibling = node.nextElementSibling;
                             while(sibling){
                                 input = sibling.querySelector('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])') || (sibling.tagName==='INPUT'?sibling:null);
-                                if(input && isValidInput(input)) {
-                                    AndroidBridge.log('通过兄弟元素找到输入框: ' + item.label);
-                                    return input;
-                                }
+                                if(input && isValidInput(input)) { AndroidBridge.log('兄弟元素: ' + item.label); return input; }
                                 sibling = sibling.nextElementSibling;
                             }
                             var parent = node.parentElement;
                             var depth = 0;
-                            while(parent && depth < 3 && parent.tagName !== 'BODY'){
+                            while(parent && depth < 4 && parent.tagName !== 'BODY'){
                                 var pSibling = parent.nextElementSibling;
                                 while(pSibling){
                                     input = pSibling.querySelector('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])') || (pSibling.tagName==='INPUT'?pSibling:null);
-                                    if(input && isValidInput(input)) {
-                                        AndroidBridge.log('通过父级兄弟找到输入框: ' + item.label);
-                                        return input;
-                                    }
+                                    if(input && isValidInput(input)) { AndroidBridge.log('父级兄弟: ' + item.label); return input; }
                                     pSibling = pSibling.nextElementSibling;
                                 }
                                 var parentInputs = parent.querySelectorAll('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])');
                                 for(var k=0; k<parentInputs.length; k++){
-                                    if(isValidInput(parentInputs[k])) {
-                                        AndroidBridge.log('通过父级容器找到输入框: ' + item.label);
-                                        return parentInputs[k];
-                                    }
+                                    if(isValidInput(parentInputs[k])) { AndroidBridge.log('父级容器: ' + item.label); return parentInputs[k]; }
                                 }
                                 parent = parent.parentElement;
                                 depth++;
@@ -389,7 +439,7 @@ class WebViewActivity : AppCompatActivity() {
                 }
         """)
 
-        // 复选框注入
+        // 复选框
         for (pid in pumpIds) {
             val safePid = pid.esc()
             sb.append("""
