@@ -37,7 +37,7 @@ object OCRFacade {
                 return@withContext OCREngine.extractPlateData(bitmap, template.roomId == 1, plateKeywordMap)
             }
 
-            // 修复：图库模式同样使用已验证的绝对坐标（基于3000x4000百分比），废弃错误的相对坐标
+            // 统一使用绝对坐标，废弃之前错误的相对坐标
             val rois = DeviceOcrStrategy.getHardcodedRois(template.machineId, screenIndex)
             if (rois.isEmpty()) return@withContext emptyMap()
 
