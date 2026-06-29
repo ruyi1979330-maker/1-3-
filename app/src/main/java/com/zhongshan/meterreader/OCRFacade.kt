@@ -35,10 +35,11 @@
 	            val results = mutableMapOf<String, String>()
 	            val bmpWidth = bitmap.width
 	            val bmpHeight = bitmap.height
-	            // 修复：将截图保存至外部缓存目录，解决普通文件管理器无法查看的问题
 	            val cropDir = File(context.externalCacheDir, "ocr_crops")
 	            if (!cropDir.exists()) cropDir.mkdirs()
 	            DebugLogger.log("OCR", "📷 本次裁剪图将保存在: ${cropDir.absolutePath}")
+	            // 增加统计：记录成功保存截图的字段名
+	            val savedCropFields = mutableListOf<String>()
 	            when (source) {
 	                ImageSource.CAMERA -> {
 	                    val rois = DeviceOcrStrategy.getHardcodedRois(template.machineId, screenIndex)
@@ -60,8 +61,10 @@
 	                            continue 
 	                        }
 	                        try {
-	                            val cropFile = File(cropDir, "${roi.fieldId.split("|")[0]}.jpg")
+	                            val fieldIdName = roi.fieldId.split("|")[0]
+	                            val cropFile = File(cropDir, "$fieldIdName.jpg")
 	                            cropFile.outputStream().use { cropped.compress(Bitmap.CompressFormat.JPEG, 100, it) }
+	                            savedCropFields.add(fieldIdName)
 	                        } catch (e: Exception) {}
 	                        val (rawText, number) = OCREngine.extractPureNumber(cropped)
 	                        DebugLogger.log("OCR-ROI", "字段=${roi.fieldId}, 裁剪区域=($cropX,$cropY,$cropW,$cropH), 原始识别=\"$rawText\", 清洗结果=$number")
@@ -79,9 +82,9 @@
 	                        val yEnd = roi.yEndPct
 	                        val roiWidth = xEnd - xStart
 	                        val roiHeight = yEnd - yStart
-	                        // 修复：扩大边距至 10%，提升对手工裁切偏差的容错率
-	                        val marginX = roiWidth * 0.10f
-	                        val marginY = roiHeight * 0.10f
+	                        // 修复：边距从 10% 缩减至 3%，避免截入手工裁切屏幕旁侧的干扰字符
+	                        val marginX = roiWidth * 0.03f
+	                        val marginY = roiHeight * 0.03f
 	                        val x0 = (xStart - marginX).coerceIn(0f, 1f) * bmpWidth
 	                        val y0 = (yStart - marginY).coerceIn(0f, 1f) * bmpHeight
 	                        val x1 = (xEnd + marginX).coerceIn(0f, 1f) * bmpWidth
@@ -101,8 +104,10 @@
 	                            continue 
 	                        }
 	                        try {
-	                            val cropFile = File(cropDir, "${roi.fieldId.split("|")[0]}.jpg")
+	                            val fieldIdName = roi.fieldId.split("|")[0]
+	                            val cropFile = File(cropDir, "$fieldIdName.jpg")
 	                            cropFile.outputStream().use { cropped.compress(Bitmap.CompressFormat.JPEG, 100, it) }
+	                            savedCropFields.add(fieldIdName)
 	                        } catch (e: Exception) {}
 	                        val (rawText, number) = OCREngine.extractPureNumber(cropped)
 	                        DebugLogger.log("OCR-ROI", "字段=${roi.fieldId}, 裁剪区域=($cropX,$cropY,$cropW,$cropH), 原始识别=\"$rawText\", 清洗结果=$number")
@@ -110,6 +115,8 @@
 	                    }
 	                }
 	            }
+	            // 增加汇总日志：方便用户直接核对是否有遗漏
+	            DebugLogger.log("OCR-Summary", "本次识别共配置 ${if (source == ImageSource.CAMERA) DeviceOcrStrategy.getHardcodedRois(template.machineId, screenIndex).size else DeviceOcrStrategy.getRelativeRois(template.machineId, screenIndex).size} 个ROI，实际成功保存 ${savedCropFields.size} 张截图。字段列表: ${savedCropFields.joinToString(", ")}")
 	            return@withContext results
 	        } finally {
 	            bitmap.recycle()
