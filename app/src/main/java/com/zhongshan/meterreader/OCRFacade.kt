@@ -27,7 +27,6 @@
 	        }
 	        DebugLogger.log("OCR", "图片尺寸: width=${bitmap.width}, height=${bitmap.height}, source=$source")
 	        try {
-	            // 板交全图识别（不受双轨影响）
 	            if (template.isHeatExchanger) {
 	                val plateKeywordMap = TemplateManager.getPlateKeywordMap(template.roomId)
 	                return@withContext OCREngine.extractPlateData(bitmap, template.roomId == 1, plateKeywordMap)
@@ -49,16 +48,10 @@
 	                        val cropY = (roi.yPercent * bmpHeight).toInt().coerceIn(0, bmpHeight - 1)
 	                        val cropW = (roi.wPercent * bmpWidth).toInt().coerceAtMost(bmpWidth - cropX)
 	                        val cropH = (roi.hPercent * bmpHeight).toInt().coerceAtMost(bmpHeight - cropY)
-	                        if (cropW <= 10 || cropH <= 10) {
-	                            DebugLogger.log("OCR-ROI", "字段=${roi.fieldId} 裁剪区域过小，跳过")
-	                            continue
-	                        }
+	                        if (cropW <= 10 || cropH <= 10) continue
 	                        val cropped = try {
 	                            Bitmap.createBitmap(bitmap, cropX, cropY, cropW, cropH)
-	                        } catch (e: Exception) { 
-	                            DebugLogger.log("OCR-ROI", "字段=${roi.fieldId} 裁剪失败: ${e.message}")
-	                            continue 
-	                        }
+	                        } catch (e: Exception) { continue }
 	                        try {
 	                            val fieldIdName = roi.fieldId.split("|")[0]
 	                            val cropFile = File(cropDir, "$fieldIdName.jpg")
@@ -75,33 +68,22 @@
 	                    DebugLogger.log("OCR", "使用相对坐标，共${rois.size}个ROI")
 	                    if (rois.isEmpty()) return@withContext emptyMap()
 	                    for (roi in rois) {
-	                        val xStart = roi.xStartPct
-	                        val yStart = roi.yStartPct
-	                        val xEnd = roi.xEndPct
-	                        val yEnd = roi.yEndPct
-	                        val roiWidth = xEnd - xStart
-	                        val roiHeight = yEnd - yStart
-	                        // 修复：边距恢复为 5%，回归最稳定的基础版本
+	                        val roiWidth = roi.xEndPct - roi.xStartPct
+	                        val roiHeight = roi.yEndPct - roi.yStartPct
 	                        val marginX = roiWidth * 0.05f
 	                        val marginY = roiHeight * 0.05f
-	                        val x0 = (xStart - marginX).coerceIn(0f, 1f) * bmpWidth
-	                        val y0 = (yStart - marginY).coerceIn(0f, 1f) * bmpHeight
-	                        val x1 = (xEnd + marginX).coerceIn(0f, 1f) * bmpWidth
-	                        val y1 = (yEnd + marginY).coerceIn(0f, 1f) * bmpHeight
+	                        val x0 = (roi.xStartPct - marginX).coerceIn(0f, 1f) * bmpWidth
+	                        val y0 = (roi.yStartPct - marginY).coerceIn(0f, 1f) * bmpHeight
+	                        val x1 = (roi.xEndPct + marginX).coerceIn(0f, 1f) * bmpWidth
+	                        val y1 = (roi.yEndPct + marginY).coerceIn(0f, 1f) * bmpHeight
 	                        val cropX = x0.toInt().coerceIn(0, bmpWidth - 1)
 	                        val cropY = y0.toInt().coerceIn(0, bmpHeight - 1)
 	                        val cropW = (x1 - x0).toInt().coerceAtMost(bmpWidth - cropX)
 	                        val cropH = (y1 - y0).toInt().coerceAtMost(bmpHeight - cropY)
-	                        if (cropW <= 10 || cropH <= 10) {
-	                            DebugLogger.log("OCR-ROI", "字段=${roi.fieldId} 裁剪区域过小，跳过")
-	                            continue
-	                        }
+	                        if (cropW <= 10 || cropH <= 10) continue
 	                        val cropped = try {
 	                            Bitmap.createBitmap(bitmap, cropX, cropY, cropW, cropH)
-	                        } catch (e: Exception) { 
-	                            DebugLogger.log("OCR-ROI", "字段=${roi.fieldId} 裁剪失败: ${e.message}")
-	                            continue 
-	                        }
+	                        } catch (e: Exception) { continue }
 	                        try {
 	                            val fieldIdName = roi.fieldId.split("|")[0]
 	                            val cropFile = File(cropDir, "$fieldIdName.jpg")
@@ -114,7 +96,7 @@
 	                    }
 	                }
 	            }
-	            DebugLogger.log("OCR-Summary", "本次识别共配置 ${if (source == ImageSource.CAMERA) DeviceOcrStrategy.getHardcodedRois(template.machineId, screenIndex).size else DeviceOcrStrategy.getRelativeRois(template.machineId, screenIndex).size} 个ROI，实际成功保存 ${savedCropFields.size} 张截图。字段列表: ${savedCropFields.joinToString(", ")}")
+	            DebugLogger.log("OCR-Summary", "本次识别共配置 ${if (source == ImageSource.CAMERA) DeviceOcrStrategy.getHardcodedRois(template.machineId, screenIndex).size else DeviceOcrStrategy.getRelativeRois(template.machineId, screenIndex).size} 个ROI，实际成功保存 ${savedCropFields.size} 张截图。")
 	            return@withContext results
 	        } finally {
 	            bitmap.recycle()
