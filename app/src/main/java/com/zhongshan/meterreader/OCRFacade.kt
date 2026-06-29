@@ -73,12 +73,17 @@ object OCRFacade {
                         val yStart = roi.yStartPct
                         val xEnd = roi.xEndPct
                         val yEnd = roi.yEndPct
-                        // 向外扩大5%容错边距
-                        val margin = 0.05f
-                        val x0 = (xStart - margin).coerceIn(0f, 1f) * bmpWidth
-                        val y0 = (yStart - margin).coerceIn(0f, 1f) * bmpHeight
-                        val x1 = (xEnd + margin).coerceIn(0f, 1f) * bmpWidth
-                        val y1 = (yEnd + margin).coerceIn(0f, 1f) * bmpHeight
+                        // 修复：边距基于ROI自身宽高的5%，而非屏幕总宽高
+                        val roiWidth = xEnd - xStart
+                        val roiHeight = yEnd - yStart
+                        val marginX = roiWidth * 0.05f
+                        val marginY = roiHeight * 0.05f
+                        
+                        val x0 = (xStart - marginX).coerceIn(0f, 1f) * bmpWidth
+                        val y0 = (yStart - marginY).coerceIn(0f, 1f) * bmpHeight
+                        val x1 = (xEnd + marginX).coerceIn(0f, 1f) * bmpWidth
+                        val y1 = (yEnd + marginY).coerceIn(0f, 1f) * bmpHeight
+                        
                         val cropX = x0.toInt().coerceIn(0, bmpWidth - 1)
                         val cropY = y0.toInt().coerceIn(0, bmpHeight - 1)
                         val cropW = (x1 - x0).toInt().coerceAtMost(bmpWidth - cropX)
