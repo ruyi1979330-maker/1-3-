@@ -1,8 +1,5 @@
 	package com.zhongshan.meterreader.util
 	import android.graphics.Bitmap
-	import android.graphics.ColorMatrix
-	import android.graphics.ColorMatrixColorFilter
-	import android.graphics.Paint
 	import com.google.mlkit.vision.common.InputImage
 	import com.google.mlkit.vision.text.TextRecognition
 	import com.google.mlkit.vision.text.latin.TextRecognizerOptions
@@ -17,15 +14,14 @@
 	    // 返回值：Pair(原始识别文本, 清洗后纯数字)
 	    suspend fun extractPureNumber(bitmap: Bitmap): Pair<String?, String?> = withContext(Dispatchers.IO) {
 	        try {
-	            val enhancedBitmap = enhanceBitmapForOcr(bitmap)
-	            val image = InputImage.fromBitmap(enhancedBitmap, 0)
+	            // 修复：取消人工对比度和饱和度干预，直接使用原图识别，保留屏幕发光特征
+	            val image = InputImage.fromBitmap(bitmap, 0)
 	            val result = recognizer.process(image).await()
 	            val rawText = result.text.trim()
 	            val elementInfo = result.textBlocks.flatMap { it.lines }.flatMap { it.elements }.joinToString(" | ") {
 	                "'${it.text}' at [${it.boundingBox?.left},${it.boundingBox?.top},${it.boundingBox?.right},${it.boundingBox?.bottom}]"
 	            }
 	            DebugLogger.log("OCR-Element", "元素信息: $elementInfo")
-	            // 采用最稳健的正则提取首个数值，无视任何乱码前后缀
 	            val normalizedText = rawText.replace(",", ".").replace(":", ".")
 	            val match = Regex("""\d{1,4}(\.\d{1,2})?""").find(normalizedText)
 	            val finalNumber = match?.value
@@ -35,19 +31,6 @@
 	        } finally {
 	            bitmap.recycle()
 	        }
-	    }
-	    private fun enhanceBitmapForOcr(src: Bitmap): Bitmap {
-	        val bmp = Bitmap.createBitmap(src.width, src.height, src.config)
-	        val canvas = android.graphics.Canvas(bmp)
-	        val paint = Paint()
-	        val cm = ColorMatrix()
-	        cm.setSaturation(0f)
-	        val contrast = ColorMatrix()
-	        contrast.setScale(1.5f, 1.5f, 1.5f, 1.5f)
-	        cm.postConcat(contrast)
-	        paint.colorFilter = ColorMatrixColorFilter(cm)
-	        canvas.drawBitmap(src, 0f, 0f, paint)
-	        return bmp
 	    }
 	    suspend fun extractPlateData(
 	        bitmap: Bitmap,
