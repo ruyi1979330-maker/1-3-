@@ -9,7 +9,6 @@
 	import kotlinx.coroutines.Dispatchers
 	import kotlinx.coroutines.tasks.await
 	import kotlinx.coroutines.withContext
-	// 修复：显式导入 DebugLogger，解决 util 包下无法直接访问的问题
 	import com.zhongshan.meterreader.DebugLogger
 	object OCREngine {
 	    private val recognizer by lazy {
@@ -22,15 +21,12 @@
 	            val image = InputImage.fromBitmap(enhancedBitmap, 0)
 	            val result = recognizer.process(image).await()
 	            val rawText = result.text.trim()
-	            // 增强排错：打印 ML Kit 识别到的每个独立文字元素及其坐标边界，彻底告别盲猜
 	            val elementInfo = result.textBlocks.flatMap { it.lines }.flatMap { it.elements }.joinToString(" | ") {
 	                "'${it.text}' at [${it.boundingBox?.left},${it.boundingBox?.top},${it.boundingBox?.right},${it.boundingBox?.bottom}]"
 	            }
 	            DebugLogger.log("OCR-Element", "元素信息: $elementInfo")
-	            // 修复：将OCR可能误识别为逗号或冒号的小数点进行还原
 	            var normalizedText = rawText.replace(",", ".").replace(":", ".")
 	            var cleaned = normalizedText.replace(Regex("[^0-9.]"), "")
-	            // 修复：去除首尾可能残留的小数点，例如 "10." 变成 "10"，"232." 变成 "232"
 	            cleaned = cleaned.trim('.')
 	            val parts = cleaned.split(".")
 	            val finalNumber = if (parts.size > 2) {
@@ -54,7 +50,8 @@
 	        val cm = ColorMatrix()
 	        cm.setSaturation(0f)
 	        val contrast = ColorMatrix()
-	        contrast.setScale(1.5f, 1.5f, 1.5f, 1.5f)
+	        // 优化：将对比度从 1.5f 提升至 2.0f，强化小数点后模糊数字的提取
+	        contrast.setScale(2.0f, 2.0f, 2.0f, 2.0f)
 	        cm.postConcat(contrast)
 	        paint.colorFilter = ColorMatrixColorFilter(cm)
 	        canvas.drawBitmap(src, 0f, 0f, paint)
