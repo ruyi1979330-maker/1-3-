@@ -9,6 +9,8 @@
 	import kotlinx.coroutines.Dispatchers
 	import kotlinx.coroutines.tasks.await
 	import kotlinx.coroutines.withContext
+	// 修复：显式导入 DebugLogger，解决 util 包下无法直接访问的问题
+	import com.zhongshan.meterreader.DebugLogger
 	object OCREngine {
 	    private val recognizer by lazy {
 	        TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
