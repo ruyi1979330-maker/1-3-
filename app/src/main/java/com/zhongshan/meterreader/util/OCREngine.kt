@@ -24,7 +24,10 @@ object OCREngine {
             val result = recognizer.process(image).await()
             val rawText = result.text.trim()
             
-            var cleaned = rawText.replace(Regex("[^0-9.]"), "")
+            // 修复：将OCR可能误识别为逗号或冒号的小数点进行还原，防止清洗时直接删除导致数值放大（如403,4变成4034）
+            var normalizedText = rawText.replace(",", ".").replace(":", ".")
+            
+            var cleaned = normalizedText.replace(Regex("[^0-9.]"), "")
             val parts = cleaned.split(".")
             val finalNumber = if (parts.size > 2) {
                 "${parts[0]}.${parts[1]}"
