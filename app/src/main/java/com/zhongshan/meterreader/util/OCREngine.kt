@@ -25,7 +25,7 @@
 	                "'${it.text}' at [${it.boundingBox?.left},${it.boundingBox?.top},${it.boundingBox?.right},${it.boundingBox?.bottom}]"
 	            }
 	            DebugLogger.log("OCR-Element", "元素信息: $elementInfo")
-	            // 优化：将逗号和冒号替换为小数点，然后直接正则提取第一个有效数字，彻底避免多数字拼接或异常后缀
+	            // 采用最稳健的正则提取首个数值，无视任何乱码前后缀
 	            val normalizedText = rawText.replace(",", ".").replace(":", ".")
 	            val match = Regex("""\d{1,4}(\.\d{1,2})?""").find(normalizedText)
 	            val finalNumber = match?.value
@@ -43,7 +43,6 @@
 	        val cm = ColorMatrix()
 	        cm.setSaturation(0f)
 	        val contrast = ColorMatrix()
-	        // 修复：对比度坚决退回 1.5f，保证特灵机屏幕文字特征不被抹平
 	        contrast.setScale(1.5f, 1.5f, 1.5f, 1.5f)
 	        cm.postConcat(contrast)
 	        paint.colorFilter = ColorMatrixColorFilter(cm)
