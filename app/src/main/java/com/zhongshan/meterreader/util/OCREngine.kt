@@ -25,17 +25,10 @@
 	                "'${it.text}' at [${it.boundingBox?.left},${it.boundingBox?.top},${it.boundingBox?.right},${it.boundingBox?.bottom}]"
 	            }
 	            DebugLogger.log("OCR-Element", "元素信息: $elementInfo")
-	            var normalizedText = rawText.replace(",", ".").replace(":", ".")
-	            var cleaned = normalizedText.replace(Regex("[^0-9.]"), "")
-	            cleaned = cleaned.trim('.')
-	            val parts = cleaned.split(".")
-	            val finalNumber = if (parts.size > 2) {
-	                "${parts[0]}.${parts[1]}"
-	            } else if (cleaned.isNotEmpty() && cleaned != ".") {
-	                cleaned
-	            } else {
-	                null
-	            }
+	            // 优化：将逗号和冒号替换为小数点，然后直接正则提取第一个有效数字，彻底避免多数字拼接或异常后缀
+	            val normalizedText = rawText.replace(",", ".").replace(":", ".")
+	            val match = Regex("""\d{1,4}(\.\d{1,2})?""").find(normalizedText)
+	            val finalNumber = match?.value
 	            return@withContext Pair(rawText, finalNumber)
 	        } catch (e: Exception) {
 	            return@withContext Pair(null, null)
