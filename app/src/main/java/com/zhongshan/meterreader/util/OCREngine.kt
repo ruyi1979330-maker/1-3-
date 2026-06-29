@@ -12,28 +12,30 @@ import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
 object OCREngine {
-
     private val recognizer by lazy {
         TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
     }
 
-    suspend fun extractPureNumber(bitmap: Bitmap): String? = withContext(Dispatchers.IO) {
+    // 返回值：Pair(原始识别文本, 清洗后纯数字)
+    suspend fun extractPureNumber(bitmap: Bitmap): Pair<String?, String?> = withContext(Dispatchers.IO) {
         try {
             val enhancedBitmap = enhanceBitmapForOcr(bitmap)
             val image = InputImage.fromBitmap(enhancedBitmap, 0)
             val result = recognizer.process(image).await()
             val rawText = result.text.trim()
+            
             var cleaned = rawText.replace(Regex("[^0-9.]"), "")
             val parts = cleaned.split(".")
-            return@withContext if (parts.size > 2) {
+            val finalNumber = if (parts.size > 2) {
                 "${parts[0]}.${parts[1]}"
             } else if (cleaned.isNotEmpty() && cleaned != ".") {
                 cleaned
             } else {
                 null
             }
+            return@withContext Pair(rawText, finalNumber)
         } catch (e: Exception) {
-            null
+            return@withContext Pair(null, null)
         } finally {
             bitmap.recycle()
         }
@@ -63,15 +65,12 @@ object OCREngine {
             val image = InputImage.fromBitmap(bitmap, 0)
             val result = recognizer.process(image).await()
             val allLines = result.textBlocks.flatMap { it.lines }.map { it.text.trim() }
-
             val sortedKeywords = plateKeywordMap.keys.sortedByDescending { it.length }
             var currentBjPrefix: String? = null
-
             allLines.forEachIndexed { index, lineText ->
                 val matchedKeyword = sortedKeywords.find { lineText.contains(it) }
                 if (matchedKeyword != null) currentBjPrefix = plateKeywordMap[matchedKeyword]
                 if (currentBjPrefix == null) return@forEachIndexed
-
                 if (lineText.contains("进水温度") || lineText.contains("进口温度"))
                     extractNextNumericValue(allLines, index)?.let { outData["${currentBjPrefix}1"] = it }
                 if (lineText.contains("出水温度") || lineText.contains("出口温度"))
