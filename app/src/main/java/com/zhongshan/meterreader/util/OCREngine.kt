@@ -50,8 +50,8 @@
 	        val cm = ColorMatrix()
 	        cm.setSaturation(0f)
 	        val contrast = ColorMatrix()
-	        // 优化：将对比度从 1.5f 提升至 2.0f，强化小数点后模糊数字的提取
-	        contrast.setScale(2.0f, 2.0f, 2.0f, 2.0f)
+	        // 修复：对比度从 2.0f 降至 1.7f，避免过度处理导致文字特征丢失大面积识别为空
+	        contrast.setScale(1.7f, 1.7f, 1.7f, 1.7f)
 	        cm.postConcat(contrast)
 	        paint.colorFilter = ColorMatrixColorFilter(cm)
 	        canvas.drawBitmap(src, 0f, 0f, paint)
