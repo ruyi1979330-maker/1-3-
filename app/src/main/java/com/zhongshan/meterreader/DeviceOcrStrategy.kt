@@ -1,7 +1,6 @@
 package com.zhongshan.meterreader
 
 object DeviceOcrStrategy {
-
     data class HardcodedRoi(
         val xPercent: Float,
         val yPercent: Float,
@@ -24,26 +23,29 @@ object DeviceOcrStrategy {
     // 绝对百分比坐标（基于3000×4000黑边原图）
     // fieldId 已统一为 "ID|中文名"
     // =====================================================================
-
     private val screw1Evaporator = listOf(
-        HardcodedRoi(0.8197f, 0.3783f, 0.1422f, 0.0275f, "field_1_01|蒸发器进口水温", "蒸发器进水温度"),
-        HardcodedRoi(0.8363f, 0.4315f, 0.1258f, 0.0280f, "field_1_02|蒸发器出口水温", "蒸发器出水温度"),
-        HardcodedRoi(0.7270f, 0.5378f, 0.2483f, 0.0313f, "field_1_05|蒸发器冷媒压力", "蒸发器制冷剂压力"),
-        HardcodedRoi(0.8373f, 0.4845f, 0.1236f, 0.0290f, "field_1_06|蒸发器蒸发温度", "蒸发器制冷剂饱和温度")
+        // 蒸发器进水温度：左边界左移确保包含完整数字
+        HardcodedRoi(0.8110f, 0.3783f, 0.1357f, 0.0275f, "field_1_01|蒸发器进口水温", "蒸发器进水温度"),
+        // 蒸发器出水温度：左边界左移25像素，解决首位7被截断问题
+        HardcodedRoi(0.8280f, 0.4315f, 0.1203f, 0.0280f, "field_1_02|蒸发器出口水温", "蒸发器出水温度"),
+        HardcodedRoi(0.7270f, 0.5378f, 0.2217f, 0.0313f, "field_1_05|蒸发器冷媒压力", "蒸发器制冷剂压力"),
+        HardcodedRoi(0.8373f, 0.4845f, 0.1103f, 0.0290f, "field_1_06|蒸发器蒸发温度", "蒸发器制冷剂饱和温度")
     )
 
     private val screw1Condenser = listOf(
-        HardcodedRoi(0.8177f, 0.3775f, 0.1516f, 0.0298f, "field_1_08|冷凝器进口水温", "冷凝器回水温度"),
-        HardcodedRoi(0.8177f, 0.4323f, 0.1493f, 0.0265f, "field_1_09|冷凝器出口水温", "冷凝器出水温度"),
-        HardcodedRoi(0.7270f, 0.5378f, 0.2472f, 0.0313f, "field_1_12|冷凝器冷媒压力", "冷凝器制冷剂压力"),
-        HardcodedRoi(0.8143f, 0.4853f, 0.1520f, 0.0298f, "field_1_13|冷凝器冷凝温度", "冷凝器制冷剂饱和温度")
+        HardcodedRoi(0.8177f, 0.3775f, 0.1353f, 0.0298f, "field_1_08|冷凝器进口水温", "冷凝器回水温度"),
+        HardcodedRoi(0.8177f, 0.4323f, 0.1333f, 0.0265f, "field_1_09|冷凝器出口水温", "冷凝器出水温度"),
+        HardcodedRoi(0.7270f, 0.5378f, 0.2207f, 0.0313f, "field_1_12|冷凝器冷媒压力", "冷凝器制冷剂压力"),
+        HardcodedRoi(0.8143f, 0.4853f, 0.1357f, 0.0298f, "field_1_13|冷凝器冷凝温度", "冷凝器制冷剂饱和温度")
     )
 
     private val screw1Compressor = listOf(
-        HardcodedRoi(0.7300f, 0.3770f, 0.2486f, 0.0323f, "field_1_14|压缩机油压", "油压"),
-        HardcodedRoi(0.8167f, 0.4850f, 0.1467f, 0.0280f, "field_1_15|压缩机排出口温度", "压缩机排出端冷剂温度"),
-        HardcodedRoi(0.4853f, 0.5888f, 0.5216f, 0.0305f, "field_1_18|主机负载", "%RLA"),
-        HardcodedRoi(0.4643f, 0.6443f, 0.5357f, 0.0283f, "field_1_17|电机电流", "电流L1 L2 L3")
+        HardcodedRoi(0.7300f, 0.3770f, 0.2220f, 0.0323f, "field_1_14|压缩机油压", "油压"),
+        HardcodedRoi(0.8167f, 0.4850f, 0.1310f, 0.0280f, "field_1_15|压缩机排出口温度", "压缩机排出端冷剂温度"),
+        // 主机负载：收窄宽度，仅框选第一个数值（L1），避免三相数据拼接
+        HardcodedRoi(0.4853f, 0.5888f, 0.1800f, 0.0305f, "field_1_18|主机负载", "%RLA"),
+        // 电机电流：收窄宽度，仅框选L1数值
+        HardcodedRoi(0.4643f, 0.6443f, 0.1800f, 0.0283f, "field_1_17|电机电流", "电流L1 L2 L3")
     )
 
     private val yorkCentrifugal = listOf(
@@ -97,10 +99,10 @@ object DeviceOcrStrategy {
     // 相对百分比坐标（每个字段独立，基于纯发光屏幕区域）
     // 特灵三屏、约克离心机、约克螺杆机完整定义
     // =====================================================================
-
     private val screw1EvapRel = listOf(
-        RoiRelative(0.7522f, 0.2728f, 0.9461f, 0.3232f, "field_1_01|蒸发器进口水温", "蒸发器进水温度"),
-        RoiRelative(0.7776f, 0.3705f, 0.9491f, 0.4218f, "field_1_02|蒸发器出口水温", "蒸发器出水温度"),
+        RoiRelative(0.7394f, 0.2728f, 0.9461f, 0.3232f, "field_1_01|蒸发器进口水温", "蒸发器进水温度"),
+        // 出水温度左扩，解决7被截断问题
+        RoiRelative(0.7600f, 0.3705f, 0.9491f, 0.4218f, "field_1_02|蒸发器出口水温", "蒸发器出水温度"),
         RoiRelative(0.6107f, 0.5654f, 0.9491f, 0.6226f, "field_1_05|蒸发器冷媒压力", "蒸发器制冷剂压力"),
         RoiRelative(0.7791f, 0.4677f, 0.9476f, 0.5209f, "field_1_06|蒸发器蒸发温度", "蒸发器制冷剂饱和温度")
     )
@@ -115,8 +117,10 @@ object DeviceOcrStrategy {
     private val screw1CompRel = listOf(
         RoiRelative(0.7350f, 0.2707f, 0.9697f, 0.3295f, "field_1_14|压缩机油压", "油压"),
         RoiRelative(0.8266f, 0.4676f, 0.9651f, 0.5187f, "field_1_15|压缩机排出口温度", "压缩机排出端冷剂温度"),
-        RoiRelative(0.4764f, 0.6568f, 0.9686f, 0.7124f, "field_1_18|主机负载", "%RLA"),
-        RoiRelative(0.4542f, 0.7580f, 0.9598f, 0.8095f, "field_1_17|电机电流", "电流L1 L2 L3")
+        // 收窄宽度，仅取第一个数值
+        RoiRelative(0.4764f, 0.6568f, 0.6500f, 0.7124f, "field_1_18|主机负载", "%RLA"),
+        // 收窄宽度，仅取L1数值
+        RoiRelative(0.4542f, 0.7580f, 0.6300f, 0.8095f, "field_1_17|电机电流", "电流L1 L2 L3")
     )
 
     private val centRel = listOf(
@@ -167,7 +171,6 @@ object DeviceOcrStrategy {
     }
 
     // ============ 公共方法 ============
-
     fun getHardcodedRois(machineId: String, screenIndex: Int): List<HardcodedRoi> {
         return absoluteConfigs["${machineId}_${screenIndex}"] ?: emptyList()
     }
