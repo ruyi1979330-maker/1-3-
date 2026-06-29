@@ -81,9 +81,9 @@
 	                        val yEnd = roi.yEndPct
 	                        val roiWidth = xEnd - xStart
 	                        val roiHeight = yEnd - yStart
-	                        // 修复：边距从 3% 调回 8%，提升对手工裁切偏差的容错率
-	                        val marginX = roiWidth * 0.08f
-	                        val marginY = roiHeight * 0.08f
+	                        // 修复：边距恢复为 5%，回归最稳定的基础版本
+	                        val marginX = roiWidth * 0.05f
+	                        val marginY = roiHeight * 0.05f
 	                        val x0 = (xStart - marginX).coerceIn(0f, 1f) * bmpWidth
 	                        val y0 = (yStart - marginY).coerceIn(0f, 1f) * bmpHeight
 	                        val x1 = (xEnd + marginX).coerceIn(0f, 1f) * bmpWidth
