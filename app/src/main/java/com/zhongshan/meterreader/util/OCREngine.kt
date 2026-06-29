@@ -50,8 +50,8 @@
 	        val cm = ColorMatrix()
 	        cm.setSaturation(0f)
 	        val contrast = ColorMatrix()
-	        // 修复：对比度从 2.0f 降至 1.7f，避免过度处理导致文字特征丢失大面积识别为空
-	        contrast.setScale(1.7f, 1.7f, 1.7f, 1.7f)
+	        // 修复：对比度坚决退回 1.5f，保证特灵机屏幕文字特征不被抹平
+	        contrast.setScale(1.5f, 1.5f, 1.5f, 1.5f)
 	        cm.postConcat(contrast)
 	        paint.colorFilter = ColorMatrixColorFilter(cm)
 	        canvas.drawBitmap(src, 0f, 0f, paint)
