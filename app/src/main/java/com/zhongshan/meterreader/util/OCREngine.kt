@@ -28,7 +28,6 @@
 	            val finalNumber = match?.value
 	            return@withContext Pair(rawText, finalNumber)
 	        } catch (e: Exception) {
-	            // 【排查问题修改】记录异常到文件日志
 	            DebugLogger.log("OCR-Error", "extractPureNumber 异常: ${Log.getStackTraceString(e)}")
 	            return@withContext Pair(null, null)
 	        } finally {
@@ -38,60 +37,86 @@
 	    suspend fun extractPlateData(
 	        bitmap: Bitmap,
 	        isRoom1: Boolean,
-	        plateKeywordMap: Map<String, String>
+	        plateKeywordMap: Map<String, String> // 保留参数避免接口变动，内部不再依赖
 	    ): Map<String, String> = withContext(Dispatchers.IO) {
 	        val outData = HashMap<String, String>()
 	        try {
 	            DebugLogger.log("OCR-Plate-Debug", "开始板交识别，原图尺寸: ${bitmap.width}x${bitmap.height}")
-	            val image = InputImage.fromBitmap(bitmap, 0)
-	            val result = recognizer.process(image).await()
-	            val allLines = result.textBlocks.flatMap { it.lines }.map { it.text.trim() }
-	            // 【排查问题新增日志】打印 ML Kit 实际识别到的所有文本行
-	            DebugLogger.log("OCR-Plate-Debug", "ML Kit 识别到 ${allLines.size} 行文本，内容如下:")
-	            allLines.forEachIndexed { idx, line ->
-	                DebugLogger.log("OCR-Plate-Debug", "行[$idx]: $line")
-	            }
-	            val sortedKeywords = plateKeywordMap.keys.sortedByDescending { it.length }
-	            var currentBjPrefix: String? = null
-	            allLines.forEachIndexed { index, lineText ->
-	                val matchedKeyword = sortedKeywords.find { lineText.contains(it) }
-	                if (matchedKeyword != null) {
-	                    currentBjPrefix = plateKeywordMap[matchedKeyword]
-	                    DebugLogger.log("OCR-Plate-Debug", "匹配到关键字: '$matchedKeyword' -> 前缀: $currentBjPrefix")
+	            // 【修复1】超长图分块识别，解决高度超限导致返回0行的问题
+	            val allLines = mutableListOf<Pair<Int, String>>() // Pair(Y坐标, 文本)
+	            if (bitmap.height > 4000) {
+	                val chunkHeight = 4000
+	                val overlap = 500
+	                var y = 0
+	                while (y < bitmap.height) {
+	                    val endY = minOf(y + chunkHeight, bitmap.height)
+	                    val chunk = Bitmap.createBitmap(bitmap, 0, y, bitmap.width, endY - y)
+	                    val image = InputImage.fromBitmap(chunk, 0)
+	                    val result = recognizer.process(image).await()
+	                    result.textBlocks.flatMap { it.lines }.forEach { line ->
+	                        val top = line.boundingBox?.top ?: 0
+	                        allLines.add(Pair(top + y, line.text.trim()))
+	                    }
+	                    chunk.recycle()
+	                    if (endY == bitmap.height) break
+	                    y = endY - overlap
 	                }
-	                if (currentBjPrefix == null) return@forEachIndexed
-	                if (lineText.contains("进水温度") || lineText.contains("进口温度"))
-	                    extractNextNumericValue(allLines, index)?.let { outData["${currentBjPrefix}1"] = it }
-	                if (lineText.contains("出水温度") || lineText.contains("出口温度"))
-	                    extractNextNumericValue(allLines, index)?.let { outData["${currentBjPrefix}2"] = it }
-	                if (lineText.contains("进水压力") || lineText.contains("进口压力"))
-	                    extractNextNumericValue(allLines, index)?.let { outData["${currentBjPrefix}3"] = it }
-	                if (lineText.contains("出水压力") || lineText.contains("出口压力"))
-	                    extractNextNumericValue(allLines, index)?.let { outData["${currentBjPrefix}4"] = it }
-	                if (lineText.contains("蒸汽压力"))
-	                    extractNextNumericValue(allLines, index)?.let { outData["${currentBjPrefix}5"] = it }
-	                if (isRoom1 && lineText.contains("水泵电流"))
-	                    extractNextNumericValue(allLines, index)?.let { outData["${currentBjPrefix}6"] = it }
+	                // 按Y坐标排序并去重重叠区域
+	                allLines.sortBy { it.first }
+	                val distinctLines = mutableListOf<Pair<Int, String>>()
+	                var lastY = -1000
+	                var lastText = ""
+	                for (pair in allLines) {
+	                    if (pair.first - lastY > 10 || pair.second != lastText) {
+	                        distinctLines.add(pair)
+	                        lastY = pair.first
+	                        lastText = pair.second
+	                    }
+	                }
+	                DebugLogger.log("OCR-Plate-Debug", "超长图分块识别完成，共 ${distinctLines.size} 行文本")
+	                allLines.clear()
+	                allLines.addAll(distinctLines)
+	            } else {
+	                val image = InputImage.fromBitmap(bitmap, 0)
+	                val result = recognizer.process(image).await()
+	                allLines.addAll(result.textBlocks.flatMap { it.lines }.map { Pair(it.boundingBox?.top ?: 0, it.text.trim()) })
+	                allLines.sortBy { it.first }
 	            }
+	            // 【修复2】顺序提取数值法，彻底解决中文乱码导致关键字匹配失败的问题
+	            val extractedNumbers = mutableListOf<String>()
+	            for ((_, lineText) in allLines) {
+	                val match = Regex("""\d{1,4}(\.\d{1,2})?""").find(lineText) ?: continue
+	                val value = match.value
+	                val hasDecimal = value.contains(".")
+	                // 严格匹配单位特征，防止误提取标题中的数字（如1#中的1）
+	                val hasUnit = lineText.contains("°C", true) || lineText.contains("MPa", true) || lineText.contains("A", true)
+	                if (hasDecimal || hasUnit) {
+	                    extractedNumbers.add(value)
+	                }
+	            }
+	            DebugLogger.log("OCR-Plate-Debug", "纯数值提取完成，共提取到 ${extractedNumbers.size} 个数值: $extractedNumbers")
+	            // 【修复3】按固定表单结构顺序赋值
+	            val expectedFields = if (isRoom1) {
+	                listOf("bj1_01", "bj1_02", "bj1_03", "bj1_04", "bj1_05", "bj1_06",
+	                       "bj1_11", "bj1_12", "bj1_13", "bj1_14", "bj1_15", "bj1_16",
+	                       "bj1_21", "bj1_22", "bj1_23", "bj1_24", "bj1_25", "bj1_26",
+	                       "bj1_31", "bj1_32", "bj1_33", "bj1_34", "bj1_35", "bj1_36",
+	                       "bj1_41", "bj1_42", "bj1_43", "bj1_44", "bj1_45", "bj1_46",
+	                       "bj1_51", "bj1_52", "bj1_53", "bj1_54", "bj1_55", "bj1_56")
+	            } else {
+	                listOf("bj3_01", "bj3_02", "bj3_03", "bj3_04", "bj3_05",
+	                       "bj3_11", "bj3_12", "bj3_13", "bj3_14", "bj3_15")
+	            }
+	            for (i in expectedFields.indices) {
+	                if (i < extractedNumbers.size) {
+	                    outData[expectedFields[i]] = extractedNumbers[i]
+	                }
+	            }
+	            DebugLogger.log("OCR-Plate-Debug", "最终映射结果: $outData")
 	        } catch (e: Exception) {
-	            // 【排查问题修改】记录异常到文件日志，避免异常被静默吞掉
 	            DebugLogger.log("OCR-Plate-Error", "板交识别发生异常: ${Log.getStackTraceString(e)}")
 	            e.printStackTrace()
 	        }
 	        return@withContext outData
-	    }
-	    private fun extractNextNumericValue(lines: List<String>, currentIndex: Int): String? {
-	        val searchEnd = minOf(currentIndex + 4, lines.size)
-	        for (i in currentIndex until searchEnd) {
-	            val match = Regex("""\d{1,4}(\.\d{1,2})?""").find(lines[i]) ?: continue
-	            var clean = match.value.replace(Regex("[^0-9.]"), "")
-	            val parts = clean.split(".")
-	            if (parts.size > 2) clean = "${parts[0]}.${parts[1]}"
-	            if (clean.isNotEmpty() && clean != ".") {
-	                val fVal = clean.toFloatOrNull()
-	                if (fVal != null && fVal in -100f..9999f) return clean
-	            }
-	        }
-	        return null
 	    }
 	}
