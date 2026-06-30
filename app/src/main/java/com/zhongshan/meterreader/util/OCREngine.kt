@@ -1,5 +1,7 @@
+	// 文件名: OCREngine.kt
 	package com.zhongshan.meterreader.util
 	import android.graphics.Bitmap
+	import android.util.Log
 	import com.google.mlkit.vision.common.InputImage
 	import com.google.mlkit.vision.text.TextRecognition
 	import com.google.mlkit.vision.text.latin.TextRecognizerOptions
@@ -14,7 +16,6 @@
 	    // 返回值：Pair(原始识别文本, 清洗后纯数字)
 	    suspend fun extractPureNumber(bitmap: Bitmap): Pair<String?, String?> = withContext(Dispatchers.IO) {
 	        try {
-	            // 修复：取消人工对比度和饱和度干预，直接使用原图识别，保留屏幕发光特征
 	            val image = InputImage.fromBitmap(bitmap, 0)
 	            val result = recognizer.process(image).await()
 	            val rawText = result.text.trim()
@@ -27,6 +28,8 @@
 	            val finalNumber = match?.value
 	            return@withContext Pair(rawText, finalNumber)
 	        } catch (e: Exception) {
+	            // 【排查问题修改】记录异常到文件日志
+	            DebugLogger.log("OCR-Error", "extractPureNumber 异常: ${Log.getStackTraceString(e)}")
 	            return@withContext Pair(null, null)
 	        } finally {
 	            bitmap.recycle()
@@ -39,14 +42,23 @@
 	    ): Map<String, String> = withContext(Dispatchers.IO) {
 	        val outData = HashMap<String, String>()
 	        try {
+	            DebugLogger.log("OCR-Plate-Debug", "开始板交识别，原图尺寸: ${bitmap.width}x${bitmap.height}")
 	            val image = InputImage.fromBitmap(bitmap, 0)
 	            val result = recognizer.process(image).await()
 	            val allLines = result.textBlocks.flatMap { it.lines }.map { it.text.trim() }
+	            // 【排查问题新增日志】打印 ML Kit 实际识别到的所有文本行
+	            DebugLogger.log("OCR-Plate-Debug", "ML Kit 识别到 ${allLines.size} 行文本，内容如下:")
+	            allLines.forEachIndexed { idx, line ->
+	                DebugLogger.log("OCR-Plate-Debug", "行[$idx]: $line")
+	            }
 	            val sortedKeywords = plateKeywordMap.keys.sortedByDescending { it.length }
 	            var currentBjPrefix: String? = null
 	            allLines.forEachIndexed { index, lineText ->
 	                val matchedKeyword = sortedKeywords.find { lineText.contains(it) }
-	                if (matchedKeyword != null) currentBjPrefix = plateKeywordMap[matchedKeyword]
+	                if (matchedKeyword != null) {
+	                    currentBjPrefix = plateKeywordMap[matchedKeyword]
+	                    DebugLogger.log("OCR-Plate-Debug", "匹配到关键字: '$matchedKeyword' -> 前缀: $currentBjPrefix")
+	                }
 	                if (currentBjPrefix == null) return@forEachIndexed
 	                if (lineText.contains("进水温度") || lineText.contains("进口温度"))
 	                    extractNextNumericValue(allLines, index)?.let { outData["${currentBjPrefix}1"] = it }
@@ -62,6 +74,8 @@
 	                    extractNextNumericValue(allLines, index)?.let { outData["${currentBjPrefix}6"] = it }
 	            }
 	        } catch (e: Exception) {
+	            // 【排查问题修改】记录异常到文件日志，避免异常被静默吞掉
+	            DebugLogger.log("OCR-Plate-Error", "板交识别发生异常: ${Log.getStackTraceString(e)}")
 	            e.printStackTrace()
 	        }
 	        return@withContext outData
