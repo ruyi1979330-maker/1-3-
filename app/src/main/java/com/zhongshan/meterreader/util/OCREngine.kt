@@ -41,7 +41,6 @@ object OCREngine {
     }
 
     data class ExtractedNumber(val y: Int, val value: String)
-    data class NumberGroup(val avgY: Float, val values: List<String>)
 
     suspend fun extractPlateData(
         bitmap: Bitmap,
@@ -53,7 +52,7 @@ object OCREngine {
             DebugLogger.log("OCR-Plate-Debug", "开始板交识别，原图尺寸: ${bitmap.width}x${bitmap.height}")
             
             // 1. 超长图分块识别
-            val allLines = mutableListOf<Pair<Int, String>>()
+            val rawLines = mutableListOf<Pair<Int, String>>()
             if (bitmap.height > 4000) {
                 val chunkHeight = 4000
                 val overlap = 500
@@ -65,118 +64,122 @@ object OCREngine {
                     val result = recognizer.process(image).await()
                     result.textBlocks.flatMap { it.lines }.forEach { line ->
                         val top = line.boundingBox?.top ?: 0
-                        allLines.add(Pair(top + y, line.text.trim()))
+                        rawLines.add(Pair(top + y, line.text.trim()))
                     }
                     chunk.recycle()
                     if (endY == bitmap.height) break
                     y = endY - overlap
                 }
-                allLines.sortBy { it.first }
-                val distinctLines = mutableListOf<Pair<Int, String>>()
-                var lastY = -1000
-                var lastText = ""
-                for (pair in allLines) {
-                    if (pair.first - lastY > 10 || pair.second != lastText) {
-                        distinctLines.add(pair)
-                        lastY = pair.first
-                        lastText = pair.second
-                    }
-                }
-                allLines.clear()
-                allLines.addAll(distinctLines)
             } else {
                 val image = InputImage.fromBitmap(bitmap, 0)
                 val result = recognizer.process(image).await()
-                allLines.addAll(result.textBlocks.flatMap { it.lines }.map { Pair(it.boundingBox?.top ?: 0, it.text.trim()) })
-                allLines.sortBy { it.first }
+                rawLines.addAll(result.textBlocks.flatMap { it.lines }.map { Pair(it.boundingBox?.top ?: 0, it.text.trim()) })
             }
 
-            // 2. 严格过滤并提取有效数值
+            // 2. 修复重叠区去重逻辑：相同文本且Y坐标差小于600视为重复
+            rawLines.sortBy { it.first }
+            val distinctLines = mutableListOf<Pair<Int, String>>()
+            val seenTexts = mutableMapOf<String, Int>()
+            for (pair in rawLines) {
+                if (pair.second.isBlank()) continue
+                if (seenTexts.containsKey(pair.second)) {
+                    if (abs(pair.first - seenTexts[pair.second]!!) < 600) continue
+                }
+                distinctLines.add(pair)
+                seenTexts[pair.second] = pair.first
+            }
+
+            // 3. 严格过滤：强制要求包含小数点，彻底干掉整数干扰（如13, 39, 0）
             val extractedNumbers = mutableListOf<ExtractedNumber>()
-            for ((y, lineText) in allLines) {
-                if (lineText.contains("#")) continue // 过滤标题行
+            for ((y, lineText) in distinctLines) {
+                if (lineText.contains("#")) continue
                 val normalizedText = lineText.replace(",", ".")
-                val match = Regex("""\d{1,3}(\.\d{1,2})?""").find(normalizedText) ?: continue
+                val match = Regex("""\d{1,3}\.\d{1,2}""").find(normalizedText) ?: continue
                 val value = match.value
-                
-                // 【修复1】增加范围校验，过滤 333, 1091 等不合理乱码数字
                 val fVal = value.toFloatOrNull()
                 if (fVal == null || fVal !in 0f..150f) continue 
-                
-                val hasDecimal = value.contains(".")
-                val hasUnit = lineText.contains("°C", true) || lineText.contains("MPa", true) || lineText.contains("A", true)
-                if (hasDecimal || hasUnit) {
-                    extractedNumbers.add(ExtractedNumber(y, value))
-                }
+                extractedNumbers.add(ExtractedNumber(y, value))
             }
             
             DebugLogger.log("OCR-Plate-Debug", "纯数值提取完成，共提取到 ${extractedNumbers.size} 个数值: ${extractedNumbers.map { it.value }}")
 
-            // 3. 根据Y坐标聚类，阈值设为6%高度
-            val groupedNumbers = mutableListOf<NumberGroup>()
-            var currentValues = mutableListOf<String>()
-            var currentYSum = 0
-            var currentCount = 0
+            // 4. 按Y坐标跳跃4%切成小片段
+            extractedNumbers.sortBy { it.y }
+            val fragments = mutableListOf<MutableList<ExtractedNumber>>()
+            var currentFragment = mutableListOf<ExtractedNumber>()
             var lastY = -1
-            val yThreshold = (bitmap.height * 0.06).toInt()
-
+            val jumpThreshold = (bitmap.height * 0.04).toInt()
             for (num in extractedNumbers) {
-                if (lastY != -1 && num.y - lastY > yThreshold) {
-                    if (currentValues.isNotEmpty()) {
-                        groupedNumbers.add(NumberGroup(currentYSum.toFloat() / currentCount, currentValues))
-                        currentValues = mutableListOf()
-                        currentYSum = 0
-                        currentCount = 0
+                if (lastY != -1 && num.y - lastY > jumpThreshold) {
+                    if (currentFragment.isNotEmpty()) {
+                        fragments.add(currentFragment)
+                        currentFragment = mutableListOf()
                     }
                 }
-                currentValues.add(num.value)
-                currentYSum += num.y
-                currentCount++
+                currentFragment.add(num)
                 lastY = num.y
             }
-            if (currentValues.isNotEmpty()) {
-                groupedNumbers.add(NumberGroup(currentYSum.toFloat() / currentCount, currentValues))
+            if (currentFragment.isNotEmpty()) fragments.add(currentFragment)
+
+            // 5. 1D K-Means 聚类，自适应将片段聚成预定的组数
+            val k = if (isRoom1) 6 else 2
+            val clusters = Array(k) { mutableListOf<ExtractedNumber>() }
+            if (extractedNumbers.isNotEmpty()) {
+                var centers = mutableListOf<Float>()
+                val minY = extractedNumbers.minOf { it.y }.toFloat()
+                val maxY = extractedNumbers.maxOf { it.y }.toFloat()
+                for (i in 0 until k) {
+                    centers.add(minY + (maxY - minY) * i / (k - 1))
+                }
+                
+                for (iter in 0 until 10) {
+                    clusters.forEach { it.clear() }
+                    for (frag in fragments) {
+                        val avgY = frag.map { it.y }.average().toFloat()
+                        var bestIdx = 0
+                        var minDist = Float.MAX_VALUE
+                        for (i in 0 until k) {
+                            val dist = abs(avgY - centers[i])
+                            if (dist < minDist) {
+                                minDist = dist
+                                bestIdx = i
+                            }
+                        }
+                        clusters[bestIdx].addAll(frag)
+                    }
+                    for (i in 0 until k) {
+                        if (clusters[i].isNotEmpty()) {
+                            centers[i] = clusters[i].map { it.y }.average().toFloat()
+                        }
+                    }
+                }
             }
 
-            // 4. 将聚类后的数据对号入座，并带上设备名称Label
+            // 6. 将聚类结果按Y排序，分配设备名称并填入
+            data class ClusterData(val avgY: Float, val numbers: List<ExtractedNumber>)
+            val clusterDataList = clusters.map { 
+                ClusterData(if (it.isNotEmpty()) it.map { n -> n.y }.average().toFloat() else Float.MAX_VALUE, it.sortedBy { n -> n.y })
+            }.sortedBy { it.avgY }
+            
             val prefix = if (isRoom1) "bj1_" else "bj3_"
-            
-            // 预设各设备组在图片中的Y轴中心点比例
-            val deviceCenters = if (isRoom1) {
-                listOf(0.15f, 0.27f, 0.39f, 0.51f, 0.63f, 0.75f).map { it * bitmap.height }
-            } else {
-                listOf(0.25f, 0.60f).map { it * bitmap.height }
-            }
-            
             val deviceNames = if (isRoom1) {
                 listOf("1号楼板交", "3号楼板交", "备用板交", "10号楼1#板交", "10号楼2#板交", "1号楼水汀板交")
             } else {
                 listOf("1#板交", "2#板交")
             }
-            
             val fieldNames = if (isRoom1) {
                 listOf("进水温度", "出水温度", "进水压力", "出水压力", "蒸汽压力", "水泵电流")
             } else {
                 listOf("进水温度", "出水温度", "进水压力", "出水压力", "蒸汽压力")
             }
 
-            for (group in groupedNumbers) {
-                var bestDeviceIndex = 0
-                var minDist = Float.MAX_VALUE
-                for (i in deviceCenters.indices) {
-                    val dist = abs(group.avgY - deviceCenters[i])
-                    if (dist < minDist) {
-                        minDist = dist
-                        bestDeviceIndex = i
-                    }
-                }
-                
-                for (i in group.values.indices) {
+            for (deviceIdx in clusterDataList.indices) {
+                val nums = clusterDataList[deviceIdx].numbers
+                for (i in nums.indices) {
                     if (i < fieldNames.size) {
-                        // 【修复2】生成带 Label 的复合键，让前端 JS 可通过文本精准匹配输入框
-                        val label = "${deviceNames[bestDeviceIndex]}${fieldNames[i]}"
-                        val key = "${prefix}${bestDeviceIndex}|$label"
-                        outData[key] = group.values[i]
+                        val label = "${deviceNames[deviceIdx]}${fieldNames[i]}"
+                        val key = "${prefix}${deviceIdx}|$label"
+                        outData[key] = nums[i].value
                     }
                 }
             }
