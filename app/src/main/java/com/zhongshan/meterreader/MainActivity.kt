@@ -1,3 +1,4 @@
+	// 文件名: MainActivity.kt
 	package com.zhongshan.meterreader
 	import android.Manifest
 	import android.content.Intent
@@ -51,7 +52,17 @@
 	        ActivityResultContracts.GetContent()
 	    ) { uri ->
 	        if (uri != null && !isProcessing) {
-	            startUcrop(uri)
+	            val template = selectedTemplate
+	            // 【修改点】板交数据为全页面截图，跳过强制 4:3 裁剪框，直接识别原图，避免关键内容被截断导致识别为空
+	            if (template != null && template.isHeatExchanger) {
+	                lifecycleScope.launch {
+	                    setProcessing(true)
+	                    processImageSuspend(uri, ImageSource.GALLERY)
+	                    setProcessing(false)
+	                }
+	            } else {
+	                startUcrop(uri)
+	            }
 	        }
 	    }
 	    private val uCropLauncher = registerForActivityResult(
