@@ -9,7 +9,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import com.zhongshan.meterreader.DebugLogger
-import kotlin.math.abs
 
 object OCREngine {
     private val recognizer by lazy {
@@ -76,20 +75,19 @@ object OCREngine {
                 rawLines.addAll(result.textBlocks.flatMap { it.lines }.map { Pair(it.boundingBox?.top ?: 0, it.text.trim()) })
             }
 
-            // 2. 修复重叠区去重逻辑：相同文本且Y坐标差小于600视为重复
+            // 2. 按 Y 坐标严格去重：不比较文本，只按 Y 坐标距离去重，彻底解决重叠区文本不同导致的重复
             rawLines.sortBy { it.first }
             val distinctLines = mutableListOf<Pair<Int, String>>()
-            val seenTexts = mutableMapOf<String, Int>()
+            var lastY = -1000
             for (pair in rawLines) {
                 if (pair.second.isBlank()) continue
-                if (seenTexts.containsKey(pair.second)) {
-                    if (abs(pair.first - seenTexts[pair.second]!!) < 600) continue
+                if (pair.first - lastY > 20) { // Y坐标相差20像素算作不同行
+                    distinctLines.add(pair)
+                    lastY = pair.first
                 }
-                distinctLines.add(pair)
-                seenTexts[pair.second] = pair.first
             }
 
-            // 3. 严格过滤：强制要求包含小数点，彻底干掉整数干扰（如13, 39, 0）
+            // 3. 严格过滤：强制要求包含小数点
             val extractedNumbers = mutableListOf<ExtractedNumber>()
             for ((y, lineText) in distinctLines) {
                 if (lineText.contains("#")) continue
@@ -103,64 +101,34 @@ object OCREngine {
             
             DebugLogger.log("OCR-Plate-Debug", "纯数值提取完成，共提取到 ${extractedNumbers.size} 个数值: ${extractedNumbers.map { it.value }}")
 
-            // 4. 按Y坐标跳跃4%切成小片段
-            extractedNumbers.sortBy { it.y }
-            val fragments = mutableListOf<MutableList<ExtractedNumber>>()
-            var currentFragment = mutableListOf<ExtractedNumber>()
-            var lastY = -1
-            val jumpThreshold = (bitmap.height * 0.04).toInt()
-            for (num in extractedNumbers) {
-                if (lastY != -1 && num.y - lastY > jumpThreshold) {
-                    if (currentFragment.isNotEmpty()) {
-                        fragments.add(currentFragment)
-                        currentFragment = mutableListOf()
-                    }
-                }
-                currentFragment.add(num)
-                lastY = num.y
-            }
-            if (currentFragment.isNotEmpty()) fragments.add(currentFragment)
+            if (extractedNumbers.isEmpty()) return@withContext outData
 
-            // 5. 1D K-Means 聚类，自适应将片段聚成预定的组数
-            val k = if (isRoom1) 6 else 2
-            val clusters = Array(k) { mutableListOf<ExtractedNumber>() }
-            if (extractedNumbers.isNotEmpty()) {
-                var centers = mutableListOf<Float>()
-                val minY = extractedNumbers.minOf { it.y }.toFloat()
-                val maxY = extractedNumbers.maxOf { it.y }.toFloat()
-                for (i in 0 until k) {
-                    centers.add(minY + (maxY - minY) * i / (k - 1))
-                }
-                
-                for (iter in 0 until 10) {
-                    clusters.forEach { it.clear() }
-                    for (frag in fragments) {
-                        val avgY = frag.map { it.y }.average().toFloat()
-                        var bestIdx = 0
-                        var minDist = Float.MAX_VALUE
-                        for (i in 0 until k) {
-                            val dist = abs(avgY - centers[i])
-                            if (dist < minDist) {
-                                minDist = dist
-                                bestIdx = i
-                            }
-                        }
-                        clusters[bestIdx].addAll(frag)
-                    }
-                    for (i in 0 until k) {
-                        if (clusters[i].isNotEmpty()) {
-                            centers[i] = clusters[i].map { it.y }.average().toFloat()
-                        }
-                    }
-                }
+            // 4. 找Y坐标跳跃最大的几个点作为组分界线
+            val numGroups = if (isRoom1) 6 else 2
+            val fieldsPerGroup = if (isRoom1) 6 else 5
+            val yDiffs = mutableListOf<Pair<Int, Int>>() // (索引, 差值)
+            for (i in 1 until extractedNumbers.size) {
+                yDiffs.add(Pair(i - 1, extractedNumbers[i].y - extractedNumbers[i-1].y))
             }
-
-            // 6. 将聚类结果按Y排序，分配设备名称并填入
-            data class ClusterData(val avgY: Float, val numbers: List<ExtractedNumber>)
-            val clusterDataList = clusters.map { 
-                ClusterData(if (it.isNotEmpty()) it.map { n -> n.y }.average().toFloat() else Float.MAX_VALUE, it.sortedBy { n -> n.y })
-            }.sortedBy { it.avgY }
             
+            // 设定最小跳跃阈值，防止同一组内因漏识别导致的大跳跃被误判
+            val minJumpThreshold = (bitmap.height * 0.02).toInt()
+            val splitIndices = yDiffs.filter { it.second > minJumpThreshold }
+                .sortedByDescending { it.second }
+                .take(numGroups - 1)
+                .map { it.first }
+                .sorted()
+
+            // 5. 按分界点切分成组
+            val groupedNumbers = mutableListOf<List<ExtractedNumber>>()
+            var startIdx = 0
+            for (splitIdx in splitIndices) {
+                groupedNumbers.add(extractedNumbers.subList(startIdx, splitIdx + 1))
+                startIdx = splitIdx + 1
+            }
+            groupedNumbers.add(extractedNumbers.subList(startIdx, extractedNumbers.size))
+
+            // 6. 按顺序赋值，每组强制只取前 fieldsPerGroup 个，防干扰
             val prefix = if (isRoom1) "bj1_" else "bj3_"
             val deviceNames = if (isRoom1) {
                 listOf("1号楼板交", "3号楼板交", "备用板交", "10号楼1#板交", "10号楼2#板交", "1号楼水汀板交")
@@ -173,10 +141,10 @@ object OCREngine {
                 listOf("进水温度", "出水温度", "进水压力", "出水压力", "蒸汽压力")
             }
 
-            for (deviceIdx in clusterDataList.indices) {
-                val nums = clusterDataList[deviceIdx].numbers
+            for (deviceIdx in groupedNumbers.indices) {
+                val nums = groupedNumbers[deviceIdx]
                 for (i in nums.indices) {
-                    if (i < fieldNames.size) {
+                    if (i < fieldsPerGroup) {
                         val label = "${deviceNames[deviceIdx]}${fieldNames[i]}"
                         val key = "${prefix}${deviceIdx}|$label"
                         outData[key] = nums[i].value
