@@ -47,7 +47,7 @@
 	            Log.d("WebViewJS", msg)
 	            DebugLogger.log("WebView-JS", msg)
 	        }
-	        // 【新增】：专用于输出 DOM 调试信息的接口
+	        // 专用于输出 DOM 调试信息的接口
 	        @JavascriptInterface
 	        fun domLog(msg: String) {
 	            Log.d("WebView-DOM", msg)
@@ -114,9 +114,9 @@
 	                if (host.contains("zs-hospital") || url?.contains("zs-hospital") == true || host.isNotEmpty()) {
 	                    binding.tvStatusBanner.visibility = View.VISIBLE
 	                    binding.tvStatusBanner.text = "🎉 连接成功！引擎已启动..."
-	                    // 【新增】：优先注入 DOM 调试脚本，打印真实 DOM 结构
+	                    // 优先注入 DOM 轮询探测脚本，它会等待表单渲染完毕后抓取真实结构
 	                    view?.evaluateJavascript(getDomDebugJs(), null)
-	                    // 继续执行原有填表逻辑（基于推测的，可能填不上，但不影响调试输出）
+	                    // 继续执行原有填表逻辑（它内部也有轮询，不干扰调试）
 	                    view?.evaluateJavascript(fillJsPayload, null)
 	                }
 	            }
@@ -139,50 +139,50 @@
 	            if (targetUrl.isNotEmpty()) binding.webView.loadUrl(targetUrl)
 	        }
 	    }
-	    // 【新增】：无害的 DOM 调试脚本，用于获取页面真实结构
+	    // 升级版：动态轮询等待 SPA 渲染完毕，然后抓取真实 DOM 结构
 	    private fun getDomDebugJs(): String {
 	        return """
 	            (function() {
-	                try {
-	                    var logMsg = '--- DOM 调试信息开始 ---\n';
-	                    // 1. 探测 Tab 标签
-	                    var tabs = document.querySelectorAll('.sectionTabItem, .el-tabs__item, [role="tab"], li');
-	                    logMsg += 'Tab 探测数量: ' + tabs.length + '\n';
-	                    for(var i=0; i < tabs.length; i++){
-	                        var t = (tabs[i].innerText || tabs[i].textContent || '').trim();
-	                        if(t.length > 0 && t.length < 20) {
-	                            logMsg += 'Tab[' + i + ']: ' + t + ' | class=' + tabs[i].className + ' | title=' + (tabs[i].getAttribute('title')||'') + '\n';
+	                if (window.__domRadarStarted) return;
+	                window.__domRadarStarted = true;
+	                var attempts = 0;
+	                var maxAttempts = 20; // 最多等待 10 秒 (20 * 500ms)
+	                AndroidBridge.domLog('DOM 雷达已启动，正在等待表单渲染...');
+	                var timer = setInterval(function() {
+	                    attempts++;
+	                    var inputs = document.querySelectorAll('input, textarea, select');
+	                    AndroidBridge.domLog('雷达扫描第 ' + attempts + ' 次，发现表单元素: ' + inputs.length + ' 个');
+	                    // 如果找到表单元素，或者超时了，就开始抓取并停止雷达
+	                    if (inputs.length > 0 || attempts >= maxAttempts) {
+	                        clearInterval(timer);
+	                        var logMsg = '\n=== 真实 DOM 抓取开始 ===\n';
+	                        // 1. 抓取页面前 3000 个字符的 HTML，看整体结构
+	                        var bodyHtml = document.body ? document.body.innerHTML : '无 body';
+	                        if (bodyHtml.length > 3000) bodyHtml = bodyHtml.substring(0, 3000) + '... [已截断]';
+	                        logMsg += '--- Body HTML 片段 ---\n' + bodyHtml + '\n\n';
+	                        // 2. 抓取所有 Input/Textarea 的核心属性
+	                        logMsg += '--- 表单元素详情 ---\n';
+	                        for (var i = 0; i < inputs.length; i++) {
+	                            var el = inputs[i];
+	                            logMsg += 'Element[' + i + ']: <' + el.tagName + '> id="' + (el.id||'') + '" name="' + (el.name||'') + '" type="' + (el.type||'') + '" class="' + (el.className||'') + '" placeholder="' + (el.placeholder||'') + '"\n';
 	                        }
-	                    }
-	                    // 2. 探测表单标签
-	                    var labels = document.querySelectorAll('.customFormItem, .el-form-item__label, .controlLabelName, label, span, td');
-	                    logMsg += '\nLabel 探测数量: ' + labels.length + '\n';
-	                    var labelCount = 0;
-	                    for(var j=0; j < labels.length; j++){
-	                        var l = (labels[j].innerText || labels[j].textContent || '').trim();
-	                        if(l.length > 2 && l.length < 20) {
-	                            logMsg += 'Label[' + labelCount + ']: ' + l + '\n';
-	                            labelCount++;
-	                            if(labelCount >= 30) break;
+	                        // 3. 抓取所有疑似 Tab 的元素
+	                        var tabs = document.querySelectorAll('[class*="tab"], [class*="Tab"], [role="tab"], li, .el-tabs__item');
+	                        logMsg += '\n--- 疑似 Tab 元素详情 ---\n';
+	                        var tabCount = 0;
+	                        for (var j = 0; j < tabs.length; j++) {
+	                            var t = tabs[j];
+	                            var text = (t.innerText || t.textContent || '').trim();
+	                            if (text.length > 0 && text.length < 30) {
+	                                logMsg += 'Tab[' + tabCount + ']: text="' + text + '" class="' + (t.className||'') + '"\n';
+	                                tabCount++;
+	                                if (tabCount >= 30) break;
+	                            }
 	                        }
+	                        logMsg += '=== 真实 DOM 抓取结束 ===';
+	                        AndroidBridge.domLog(logMsg);
 	                    }
-	                    // 3. 探测 Input/Textarea
-	                    var inputs = document.querySelectorAll('input, textarea');
-	                    logMsg += '\nInput 探测数量: ' + inputs.length + '\n';
-	                    for(var k=0; k < inputs.length; k++){
-	                        var inp = inputs[k];
-	                        var ph = (inp.placeholder || '').trim();
-	                        var nm = (inp.name || '').trim();
-	                        var id = (inp.id || '').trim();
-	                        if(ph || nm || id) {
-	                            logMsg += 'Input[' + k + ']: type=' + (inp.type||'') + ' | id=' + id + ' | name=' + nm + ' | placeholder=' + ph + '\n';
-	                        }
-	                    }
-	                    logMsg += '--- DOM 调试信息结束 ---';
-	                    AndroidBridge.domLog(logMsg);
-	                } catch(e) {
-	                    AndroidBridge.domLog('DOM 调试出错: ' + e.message);
-	                }
+	                }, 500);
 	            })();
 	        """
 	    }
