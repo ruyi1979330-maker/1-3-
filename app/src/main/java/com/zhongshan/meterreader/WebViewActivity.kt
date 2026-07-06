@@ -63,6 +63,12 @@
 	        val keys    = intent.getStringArrayExtra("EXTRA_KEYS")    ?: emptyArray()
 	        val values  = intent.getStringArrayExtra("EXTRA_VALUES")  ?: emptyArray()
 	        val pumpIds = intent.getStringArrayExtra("EXTRA_PUMP_IDS")?: emptyArray()
+	        // ===== 关键日志：看看到底收到了什么数据 =====
+	        DebugLogger.log("WebView", "收到的 Intent 数据: url=$targetUrl")
+	        DebugLogger.log("WebView", "收到的 keys: ${keys.toList()}")
+	        DebugLogger.log("WebView", "收到的 values: ${values.toList()}")
+	        DebugLogger.log("WebView", "收到的 pumpIds: ${pumpIds.toList()}")
+	        // ==========================================
 	        val (mergedKeys, mergedValues) = mergePumpData(keys, values, pumpIds)
 	        fillJsPayload = compileFillJs(mergedKeys, mergedValues, pumpIds)
 	        initWebView()
