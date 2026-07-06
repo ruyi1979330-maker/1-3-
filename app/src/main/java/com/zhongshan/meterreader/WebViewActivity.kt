@@ -19,7 +19,7 @@ class WebViewActivity : AppCompatActivity() {
     companion object {
         private const val WEB_LOAD_TIMEOUT_MS = 20_000L
 
-        // 螺杆机组填充脚本（基于用户提供的DOM方案 + 异步Tab切换）
+        // 螺杆机组填充脚本（保留原有逻辑，仅增加调试打印）
         private const val JS_FILL_SCREW = """
 (function() {
     function findFormItemByLabel(labelTitle) {
@@ -35,7 +35,6 @@ class WebViewActivity : AppCompatActivity() {
         return checkboxLabel.querySelector('.Checkbox-box .icon-ok') !== null;
     }
 
-    // 等待元素出现
     function waitForElement(selector, timeout, callback) {
         var start = Date.now();
         function check() {
@@ -58,7 +57,6 @@ class WebViewActivity : AppCompatActivity() {
                 return;
             }
             if (!tab.classList.contains('active')) tab.click();
-            // 再等一小段时间确保内容渲染
             setTimeout(function() {
                 waitForElement('.customFormItem', 5000, function(el) {
                     callback(el != null);
@@ -116,7 +114,20 @@ class WebViewActivity : AppCompatActivity() {
         return true;
     }
 
+    // 【关键调试】打印当前页面的customFormItem信息
+    function debugPrintItems() {
+        var items = document.querySelectorAll('.customFormItem');
+        var titles = [];
+        for (var i = 0; i < items.length && i < 5; i++) {
+            var label = items[i].querySelector('.controlLabelName');
+            titles.push(label ? (label.getAttribute('title') || label.textContent) : 'null');
+        }
+        AndroidBridge.log('[Screw] customFormItem总数: ' + items.length + ', 前5标题: ' + JSON.stringify(titles));
+    }
+
     function doFill(data, result) {
+        debugPrintItems();  // <-- 唯一新增
+
         if (data.operator) {
             var formItem = findFormItemByLabel('螺杆机组操作员');
             if (formItem) {
@@ -202,7 +213,7 @@ class WebViewActivity : AppCompatActivity() {
 })();
 """
 
-        // 板交填充脚本（同样基于DOM方案）
+        // 板交填充脚本（同样增加调试打印）
         private const val JS_FILL_PLATE = """
 (function() {
     function findFormItemByLabel(labelTitle) {
@@ -278,7 +289,19 @@ class WebViewActivity : AppCompatActivity() {
         return true;
     }
 
+    function debugPrintItems() {
+        var items = document.querySelectorAll('.customFormItem');
+        var titles = [];
+        for (var i = 0; i < items.length && i < 5; i++) {
+            var label = items[i].querySelector('.controlLabelName');
+            titles.push(label ? (label.getAttribute('title') || label.textContent) : 'null');
+        }
+        AndroidBridge.log('[Plate] customFormItem总数: ' + items.length + ', 前5标题: ' + JSON.stringify(titles));
+    }
+
     function doFill(data, result) {
+        debugPrintItems();  // <-- 唯一新增
+
         var groups = data.plateGroups;
         if (!groups || !Array.isArray(groups)) return;
         for (var g = 0; g < groups.length; g++) {
@@ -335,6 +358,7 @@ class WebViewActivity : AppCompatActivity() {
 """
     }
 
+    // 其余 Kotlin 部分与之前完全一致，无需修改
     internal lateinit var binding: ActivityWebviewBinding
     private var targetUrl   = ""
     private var fillJsPayload = ""
@@ -459,12 +483,7 @@ class WebViewActivity : AppCompatActivity() {
     }
 
     private fun compileFillJs(keys: Array<String>, values: Array<String>, pumpIds: Array<String>): String {
-        val sb = StringBuilder()
-        sb.append("(function(){\n")
-        sb.append("if(window.__ocrFillEngineLoaded) return;\n")
-        sb.append("window.__ocrFillEngineLoaded = true;\n")
-        sb.append("})();")
-        return sb.toString()
+        return "(function(){ if(window.__ocrFillEngineLoaded) return; window.__ocrFillEngineLoaded=true; })();"
     }
 
     override fun onDestroy() {
