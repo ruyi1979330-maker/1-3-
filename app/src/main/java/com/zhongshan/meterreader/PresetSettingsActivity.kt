@@ -107,7 +107,6 @@
 	        }
 	        override fun onBindViewHolder(holder: ViewHolder, position: Int) {
 	            val item = items[position]
-	            // 根据类型显示不同的值内容
 	            val displayValue = if (item.storageKey.endsWith("_pumps")) {
 	                PresetManager.getPumps(item.storageKey, item.defaultValue).joinToString(", ")
 	            } else {
