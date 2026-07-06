@@ -7,7 +7,6 @@ import android.net.http.SslError
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
 import android.view.View
 import android.webkit.*
 import androidx.appcompat.app.AppCompatActivity
@@ -19,32 +18,60 @@ class WebViewActivity : AppCompatActivity() {
     companion object {
         private const val WEB_LOAD_TIMEOUT_MS = 20_000L
 
-        // 螺杆机组填充脚本（保留原有逻辑，仅增加调试打印）
+        // 螺杆机组填充脚本（精确匹配 + 文本 fallback）
         private const val JS_FILL_SCREW = """
 (function() {
-    function findFormItemByLabel(labelTitle) {
+    // 简单的调试日志，不会中断执行
+    function log(msg) {
+        try { AndroidBridge.log('[Screw] ' + msg); } catch(e) {}
+    }
+
+    // ---- DOM 查找工具 ----
+    function findFormItemByTitleExact(title) {
         var items = document.querySelectorAll('.customFormItem');
         for (var i = 0; i < items.length; i++) {
-            var label = items[i].querySelector('.controlLabelName[title="' + labelTitle + '"]');
+            var label = items[i].querySelector('.controlLabelName[title="' + title + '"]');
             if (label) return items[i];
         }
         return null;
+    }
+
+    // fallback：根据标签文本内容匹配（容错空格和细微差异）
+    function findFormItemByLabelText(text) {
+        var items = document.querySelectorAll('.customFormItem');
+        var t = text.replace(/\s+/g, '');  // 去除所有空格
+        for (var i = 0; i < items.length; i++) {
+            var label = items[i].querySelector('.controlLabelName');
+            if (label) {
+                var labelText = (label.textContent || label.innerText || '').replace(/\s+/g, '');
+                if (labelText.indexOf(t) >= 0) return items[i];
+            }
+        }
+        return null;
+    }
+
+    function findFormItemSmart(labelTitle) {
+        // 先精确匹配
+        var item = findFormItemByTitleExact(labelTitle);
+        if (item) return item;
+        // 再模糊文本匹配
+        item = findFormItemByLabelText(labelTitle);
+        if (item) log('fallback文本匹配成功: ' + labelTitle);
+        return item;
     }
 
     function isCheckboxChecked(checkboxLabel) {
         return checkboxLabel.querySelector('.Checkbox-box .icon-ok') !== null;
     }
 
+    // ---- 异步 Tab 切换 ----
     function waitForElement(selector, timeout, callback) {
         var start = Date.now();
         function check() {
             var el = document.querySelector(selector);
             if (el) { callback(el); return; }
-            if (Date.now() - start < timeout) {
-                setTimeout(check, 200);
-            } else {
-                callback(null);
-            }
+            if (Date.now() - start < timeout) setTimeout(check, 200);
+            else callback(null);
         }
         check();
     }
@@ -52,10 +79,7 @@ class WebViewActivity : AppCompatActivity() {
     function switchTabAsync(tabTitle, callback) {
         var tabSelector = '.sectionTabItem[title="' + tabTitle + '"]';
         waitForElement(tabSelector, 5000, function(tab) {
-            if (!tab) {
-                callback(false);
-                return;
-            }
+            if (!tab) { callback(false); return; }
             if (!tab.classList.contains('active')) tab.click();
             setTimeout(function() {
                 waitForElement('.customFormItem', 5000, function(el) {
@@ -65,8 +89,9 @@ class WebViewActivity : AppCompatActivity() {
         });
     }
 
+    // ---- 字段填充 ----
     function fillNumberInput(labelTitle, value) {
-        var formItem = findFormItemByLabel(labelTitle);
+        var formItem = findFormItemSmart(labelTitle);
         if (!formItem) return false;
         var inputBox = formItem.querySelector('.customFormControlBox');
         if (!inputBox) return false;
@@ -89,7 +114,7 @@ class WebViewActivity : AppCompatActivity() {
     }
 
     function checkPumpByGroup(groupTitle, pumpNames) {
-        var groupItem = findFormItemByLabel(groupTitle);
+        var groupItem = findFormItemSmart(groupTitle);
         if (!groupItem) return 0;
         var count = 0;
         for (var i = 0; i < pumpNames.length; i++) {
@@ -104,7 +129,7 @@ class WebViewActivity : AppCompatActivity() {
     }
 
     function fillTextarea(labelTitle, text) {
-        var formItem = findFormItemByLabel(labelTitle);
+        var formItem = findFormItemSmart(labelTitle);
         if (!formItem) return false;
         var textarea = formItem.querySelector('textarea');
         if (!textarea) return false;
@@ -114,22 +139,10 @@ class WebViewActivity : AppCompatActivity() {
         return true;
     }
 
-    // 【关键调试】打印当前页面的customFormItem信息
-    function debugPrintItems() {
-        var items = document.querySelectorAll('.customFormItem');
-        var titles = [];
-        for (var i = 0; i < items.length && i < 5; i++) {
-            var label = items[i].querySelector('.controlLabelName');
-            titles.push(label ? (label.getAttribute('title') || label.textContent) : 'null');
-        }
-        AndroidBridge.log('[Screw] customFormItem总数: ' + items.length + ', 前5标题: ' + JSON.stringify(titles));
-    }
-
+    // ---- 主填充逻辑 ----
     function doFill(data, result) {
-        debugPrintItems();  // <-- 唯一新增
-
         if (data.operator) {
-            var formItem = findFormItemByLabel('螺杆机组操作员');
+            var formItem = findFormItemSmart('螺杆机组操作员');
             if (formItem) {
                 var selectInput = formItem.querySelector('input');
                 if (selectInput) {
@@ -191,9 +204,6 @@ class WebViewActivity : AppCompatActivity() {
                 }
             }
         }
-        if (window.AndroidBridge && window.AndroidBridge.onFillComplete) {
-            AndroidBridge.onFillComplete(result.success.length);
-        }
     }
 
     window.fillScrewUnitForm = function(data) {
@@ -201,8 +211,12 @@ class WebViewActivity : AppCompatActivity() {
         switchTabAsync('螺杆机组（特灵）', function(ok) {
             if (ok) {
                 doFill(data, result);
+                if (window.AndroidBridge && window.AndroidBridge.onFillComplete) {
+                    AndroidBridge.onFillComplete(result.success.length);
+                }
             } else {
                 result.failed.push('切换标签页失败');
+                log('Tab切换失败');
                 if (window.AndroidBridge && window.AndroidBridge.onFillComplete) {
                     AndroidBridge.onFillComplete(0);
                 }
@@ -213,16 +227,37 @@ class WebViewActivity : AppCompatActivity() {
 })();
 """
 
-        // 板交填充脚本（同样增加调试打印）
+        // 板交填充脚本（同样的 fallback 机制）
         private const val JS_FILL_PLATE = """
 (function() {
-    function findFormItemByLabel(labelTitle) {
+    function log(msg) {
+        try { AndroidBridge.log('[Plate] ' + msg); } catch(e) {}
+    }
+
+    function findFormItemByTitleExact(title) {
         var items = document.querySelectorAll('.customFormItem');
         for (var i = 0; i < items.length; i++) {
-            var label = items[i].querySelector('.controlLabelName[title="' + labelTitle + '"]');
+            var label = items[i].querySelector('.controlLabelName[title="' + title + '"]');
             if (label) return items[i];
         }
         return null;
+    }
+
+    function findFormItemByLabelText(text) {
+        var items = document.querySelectorAll('.customFormItem');
+        var t = text.replace(/\s+/g, '');
+        for (var i = 0; i < items.length; i++) {
+            var label = items[i].querySelector('.controlLabelName');
+            if (label) {
+                var labelText = (label.textContent || label.innerText || '').replace(/\s+/g, '');
+                if (labelText.indexOf(t) >= 0) return items[i];
+            }
+        }
+        return null;
+    }
+
+    function findFormItemSmart(labelTitle) {
+        return findFormItemByTitleExact(labelTitle) || findFormItemByLabelText(labelTitle);
     }
 
     function waitForElement(selector, timeout, callback) {
@@ -230,11 +265,8 @@ class WebViewActivity : AppCompatActivity() {
         function check() {
             var el = document.querySelector(selector);
             if (el) { callback(el); return; }
-            if (Date.now() - start < timeout) {
-                setTimeout(check, 200);
-            } else {
-                callback(null);
-            }
+            if (Date.now() - start < timeout) setTimeout(check, 200);
+            else callback(null);
         }
         check();
     }
@@ -242,10 +274,7 @@ class WebViewActivity : AppCompatActivity() {
     function switchTabAsync(tabTitle, callback) {
         var tabSelector = '.sectionTabItem[title="' + tabTitle + '"]';
         waitForElement(tabSelector, 5000, function(tab) {
-            if (!tab) {
-                callback(false);
-                return;
-            }
+            if (!tab) { callback(false); return; }
             if (!tab.classList.contains('active')) tab.click();
             setTimeout(function() {
                 waitForElement('.customFormItem', 5000, function(el) {
@@ -256,7 +285,7 @@ class WebViewActivity : AppCompatActivity() {
     }
 
     function fillNumberInput(labelTitle, value) {
-        var formItem = findFormItemByLabel(labelTitle);
+        var formItem = findFormItemSmart(labelTitle);
         if (!formItem) return false;
         var inputBox = formItem.querySelector('.customFormControlBox');
         if (!inputBox) return false;
@@ -279,7 +308,7 @@ class WebViewActivity : AppCompatActivity() {
     }
 
     function fillTextarea(labelTitle, text) {
-        var formItem = findFormItemByLabel(labelTitle);
+        var formItem = findFormItemSmart(labelTitle);
         if (!formItem) return false;
         var textarea = formItem.querySelector('textarea');
         if (!textarea) return false;
@@ -289,19 +318,7 @@ class WebViewActivity : AppCompatActivity() {
         return true;
     }
 
-    function debugPrintItems() {
-        var items = document.querySelectorAll('.customFormItem');
-        var titles = [];
-        for (var i = 0; i < items.length && i < 5; i++) {
-            var label = items[i].querySelector('.controlLabelName');
-            titles.push(label ? (label.getAttribute('title') || label.textContent) : 'null');
-        }
-        AndroidBridge.log('[Plate] customFormItem总数: ' + items.length + ', 前5标题: ' + JSON.stringify(titles));
-    }
-
     function doFill(data, result) {
-        debugPrintItems();  // <-- 唯一新增
-
         var groups = data.plateGroups;
         if (!groups || !Array.isArray(groups)) return;
         for (var g = 0; g < groups.length; g++) {
@@ -335,9 +352,6 @@ class WebViewActivity : AppCompatActivity() {
                 }
             }
         }
-        if (window.AndroidBridge && window.AndroidBridge.onFillComplete) {
-            AndroidBridge.onFillComplete(result.success.length);
-        }
     }
 
     window.fillPlateForm = function(data) {
@@ -345,6 +359,9 @@ class WebViewActivity : AppCompatActivity() {
         switchTabAsync('板交', function(ok) {
             if (ok) {
                 doFill(data, result);
+                if (window.AndroidBridge && window.AndroidBridge.onFillComplete) {
+                    AndroidBridge.onFillComplete(result.success.length);
+                }
             } else {
                 result.failed.push('切换标签页失败');
                 if (window.AndroidBridge && window.AndroidBridge.onFillComplete) {
@@ -358,9 +375,8 @@ class WebViewActivity : AppCompatActivity() {
 """
     }
 
-    // 其余 Kotlin 部分与之前完全一致，无需修改
     internal lateinit var binding: ActivityWebviewBinding
-    private var targetUrl   = ""
+    private var targetUrl = ""
     private var fillJsPayload = ""
     private var fillDataJson: String? = null
     private var fillScriptType: String? = null
@@ -384,7 +400,7 @@ class WebViewActivity : AppCompatActivity() {
         }
         @JavascriptInterface
         fun log(msg: String) {
-            Log.d("WebViewJS", msg)
+            // 仅用于调试，不中断脚本
             DebugLogger.log("WebView-JS", msg)
         }
     }
@@ -401,9 +417,10 @@ class WebViewActivity : AppCompatActivity() {
         fillScriptType = intent.getStringExtra("EXTRA_FILL_TYPE")
 
         if (fillDataJson == null) {
-            val keys    = intent.getStringArrayExtra("EXTRA_KEYS")    ?: emptyArray()
-            val values  = intent.getStringArrayExtra("EXTRA_VALUES")  ?: emptyArray()
-            val pumpIds = intent.getStringArrayExtra("EXTRA_PUMP_IDS")?: emptyArray()
+            // 兼容旧格式，但此路径已不再使用
+            val keys = intent.getStringArrayExtra("EXTRA_KEYS") ?: emptyArray()
+            val values = intent.getStringArrayExtra("EXTRA_VALUES") ?: emptyArray()
+            val pumpIds = intent.getStringArrayExtra("EXTRA_PUMP_IDS") ?: emptyArray()
             fillJsPayload = compileFillJs(keys, values, pumpIds)
         }
 
@@ -414,19 +431,19 @@ class WebViewActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled", "WebViewClientOnReceivedSslError")
     private fun initWebView() {
         binding.webView.settings.apply {
-            javaScriptEnabled  = true
-            domStorageEnabled  = true
-            mixedContentMode   = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         }
         binding.webView.addJavascriptInterface(SafeWebBridge(this), "AndroidBridge")
 
         binding.webView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                binding.progressBar.visibility      = View.VISIBLE
-                binding.tvStatusBanner.visibility   = View.VISIBLE
+                binding.progressBar.visibility = View.VISIBLE
+                binding.tvStatusBanner.visibility = View.VISIBLE
                 binding.tvStatusBanner.text = "⏳ 正在连接数据中心，请稍候…"
                 timeoutHandler.postDelayed({
-                    binding.progressBar.visibility    = View.GONE
+                    binding.progressBar.visibility = View.GONE
                     binding.webView.stopLoading()
                     binding.layoutNetworkError.visibility = View.VISIBLE
                     binding.tvErrorMsg.text = "网络超时，请检查信号后重试。"
@@ -465,10 +482,10 @@ class WebViewActivity : AppCompatActivity() {
             override fun onReceivedError(view: WebView?, req: WebResourceRequest?, err: WebResourceError?) {
                 if (req?.isForMainFrame == true) {
                     timeoutHandler.removeCallbacksAndMessages(null)
-                    binding.progressBar.visibility        = View.GONE
+                    binding.progressBar.visibility = View.GONE
                     binding.layoutNetworkError.visibility = View.VISIBLE
-                    binding.tvErrorMsg.text               = "加载失败，请检查是否连接医院内网 Wi-Fi。"
-                    binding.tvStatusBanner.visibility     = View.GONE
+                    binding.tvErrorMsg.text = "加载失败，请检查是否连接医院内网 Wi-Fi。"
+                    binding.tvStatusBanner.visibility = View.GONE
                 }
             }
             override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
@@ -483,7 +500,8 @@ class WebViewActivity : AppCompatActivity() {
     }
 
     private fun compileFillJs(keys: Array<String>, values: Array<String>, pumpIds: Array<String>): String {
-        return "(function(){ if(window.__ocrFillEngineLoaded) return; window.__ocrFillEngineLoaded=true; })();"
+        // 旧版脚本保留（以防万一），但已不再使用
+        return "(function(){ console.log('deprecated'); })();"
     }
 
     override fun onDestroy() {
