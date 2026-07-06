@@ -252,7 +252,6 @@ class MainActivity : AppCompatActivity() {
             else -> return root
         }
 
-        // 根据 fieldId 偏移范围提取本机组数据
         val baseNum = when (unitNo) {
             1 -> 1
             2 -> 31
@@ -278,7 +277,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (unitData.isEmpty()) {
-            // 无OCR数据，不填充该机组
             return root
         }
 
@@ -287,7 +285,6 @@ class MainActivity : AppCompatActivity() {
             unitJson.put(k, v)
         }
 
-        // 仅当有OCR数据时才加入预设水压
         val presets = PresetManager.getPresetsForMachine(machineId)
         for ((fieldIdWithLabel, value) in presets) {
             val label = fieldIdWithLabel.split("|").getOrNull(1) ?: continue
@@ -297,7 +294,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 冷冻泵
         val pumps = screwPumpNames[machineId] ?: emptyList()
         val pumpsArray = JSONArray()
         pumps.forEach { pumpsArray.put(it) }
@@ -356,7 +352,6 @@ class MainActivity : AppCompatActivity() {
                     label.contains("备注") -> "remark"
                     else -> continue
                 }
-                // 备注单独处理，避免被数值字段覆盖
                 if (fieldKey == "remark") {
                     fields.put("remark", value)
                 } else {
