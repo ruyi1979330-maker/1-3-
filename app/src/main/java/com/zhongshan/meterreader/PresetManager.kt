@@ -11,7 +11,6 @@
 	        val defaultValue: String,
 	        val machineGroup: String
 	    )
-	    // 所有可用的冷冻泵列表
 	    val availablePumps = listOf(
 	        "1号冷冻泵", "2号冷冻泵", "3号冷冻泵", "4号冷冻泵",
 	        "5号冷冻泵", "6号冷冻泵", "7号冷冻泵", "8号冷冻泵"
@@ -70,12 +69,10 @@
 	    fun getPresetValue(storageKey: String, defaultValue: String): String {
 	        return prefs.getString(storageKey, defaultValue) ?: defaultValue
 	    }
-	    // 新增：获取已勾选的冷冻泵列表
 	    fun getPumps(storageKey: String, defaultValue: String): List<String> {
 	        val raw = prefs.getString(storageKey, defaultValue) ?: defaultValue
 	        return raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
 	    }
-	    // 新增：保存勾选的冷冻泵列表
 	    fun savePumps(storageKey: String, pumps: List<String>) {
 	        prefs.edit().putString(storageKey, pumps.joinToString(",")).apply()
 	    }
