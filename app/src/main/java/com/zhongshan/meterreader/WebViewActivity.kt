@@ -19,12 +19,9 @@ class WebViewActivity : AppCompatActivity() {
     companion object {
         private const val WEB_LOAD_TIMEOUT_MS = 20_000L
 
-        // 螺杆机组填充脚本（异步Tab切换 + 内容就绪检测 + 字段重试）
+        // 螺杆机组填充脚本（基于用户提供的DOM方案 + 异步Tab切换）
         private const val JS_FILL_SCREW = """
 (function() {
-    if (window.__ocrFillEngineLoaded) return;
-    window.__ocrFillEngineLoaded = true;
-
     function findFormItemByLabel(labelTitle) {
         var items = document.querySelectorAll('.customFormItem');
         for (var i = 0; i < items.length; i++) {
@@ -38,14 +35,12 @@ class WebViewActivity : AppCompatActivity() {
         return checkboxLabel.querySelector('.Checkbox-box .icon-ok') !== null;
     }
 
+    // 等待元素出现
     function waitForElement(selector, timeout, callback) {
         var start = Date.now();
         function check() {
             var el = document.querySelector(selector);
-            if (el) {
-                callback(el);
-                return;
-            }
+            if (el) { callback(el); return; }
             if (Date.now() - start < timeout) {
                 setTimeout(check, 200);
             } else {
@@ -55,7 +50,7 @@ class WebViewActivity : AppCompatActivity() {
         check();
     }
 
-    function switchTabAndWait(tabTitle, callback) {
+    function switchTabAsync(tabTitle, callback) {
         var tabSelector = '.sectionTabItem[title="' + tabTitle + '"]';
         waitForElement(tabSelector, 5000, function(tab) {
             if (!tab) {
@@ -63,98 +58,66 @@ class WebViewActivity : AppCompatActivity() {
                 return;
             }
             if (!tab.classList.contains('active')) tab.click();
-            waitForElement('.customFormItem', 5000, function(el) {
-                callback(el != null);
-            });
+            // 再等一小段时间确保内容渲染
+            setTimeout(function() {
+                waitForElement('.customFormItem', 5000, function(el) {
+                    callback(el != null);
+                });
+            }, 200);
         });
     }
 
-    function fillNumberInputWithRetry(labelTitle, value, maxRetries, callback) {
-        if (maxRetries <= 0) {
-            callback(false);
-            return;
-        }
+    function fillNumberInput(labelTitle, value) {
         var formItem = findFormItemByLabel(labelTitle);
-        if (!formItem) {
-            setTimeout(function() {
-                fillNumberInputWithRetry(labelTitle, value, maxRetries - 1, callback);
-            }, 200);
-            return;
-        }
+        if (!formItem) return false;
         var inputBox = formItem.querySelector('.customFormControlBox');
-        if (!inputBox) {
-            callback(false);
-            return;
-        }
+        if (!inputBox) return false;
         inputBox.click();
-        setTimeout(function() {
-            var input = formItem.querySelector('input');
-            if (!input) {
-                var textSpan = inputBox.querySelector('.ellipsis:not(.Font13)');
-                if (textSpan) {
-                    textSpan.textContent = value;
-                    textSpan.classList.remove('Gray_bd');
-                    callback(true);
-                } else {
-                    callback(false);
-                }
-                return;
+        var input = formItem.querySelector('input');
+        if (!input) {
+            var textSpan = inputBox.querySelector('.ellipsis:not(.Font13)');
+            if (textSpan) {
+                textSpan.textContent = value;
+                textSpan.classList.remove('Gray_bd');
+                return true;
             }
-            input.value = value;
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            input.dispatchEvent(new Event('change', { bubbles: true }));
-            input.blur();
-            callback(true);
-        }, 100);
+            return false;
+        }
+        input.value = value;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        input.blur();
+        return true;
     }
 
-    function checkPumpByGroup(groupTitle, pumpNames, result) {
+    function checkPumpByGroup(groupTitle, pumpNames) {
         var groupItem = findFormItemByLabel(groupTitle);
-        if (!groupItem) return;
+        if (!groupItem) return 0;
+        var count = 0;
         for (var i = 0; i < pumpNames.length; i++) {
             if (pumpNames[i] === '全选') continue;
             var checkbox = groupItem.querySelector('label.ming.Checkbox[title="' + pumpNames[i] + '"]');
             if (checkbox && !isCheckboxChecked(checkbox)) {
                 checkbox.click();
-                result.pumpsChecked++;
+                count++;
             }
         }
+        return count;
     }
 
-    function fillTextareaWithRetry(labelTitle, text, maxRetries, callback) {
-        if (maxRetries <= 0) {
-            callback(false);
-            return;
-        }
+    function fillTextarea(labelTitle, text) {
         var formItem = findFormItemByLabel(labelTitle);
-        if (!formItem) {
-            setTimeout(function() {
-                fillTextareaWithRetry(labelTitle, text, maxRetries - 1, callback);
-            }, 200);
-            return;
-        }
+        if (!formItem) return false;
         var textarea = formItem.querySelector('textarea');
-        if (!textarea) {
-            callback(false);
-            return;
-        }
+        if (!textarea) return false;
         textarea.value = text;
         textarea.dispatchEvent(new Event('input', { bubbles: true }));
         textarea.dispatchEvent(new Event('change', { bubbles: true }));
-        callback(true);
+        return true;
     }
 
-    function doFillScrew(data, result, onComplete) {
-        var totalTasks = 0;
-        var completedTasks = 0;
-
-        function taskDone() {
-            completedTasks++;
-            if (completedTasks >= totalTasks) onComplete();
-        }
-
+    function doFill(data, result) {
         if (data.operator) {
-            totalTasks++;
             var formItem = findFormItemByLabel('螺杆机组操作员');
             if (formItem) {
                 var selectInput = formItem.querySelector('input');
@@ -162,13 +125,8 @@ class WebViewActivity : AppCompatActivity() {
                     selectInput.value = data.operator;
                     selectInput.dispatchEvent(new Event('input', { bubbles: true }));
                     result.success.push('螺杆机组操作员');
-                } else {
-                    result.failed.push('螺杆机组操作员');
-                }
-            } else {
-                result.failed.push('螺杆机组操作员');
-            }
-            taskDone();
+                } else result.failed.push('螺杆机组操作员');
+            } else result.failed.push('螺杆机组操作员');
         }
 
         var units = [
@@ -176,7 +134,6 @@ class WebViewActivity : AppCompatActivity() {
             { no: 2, prefix: '2#', data: data.unit2 },
             { no: 3, prefix: '3#', data: data.unit3 }
         ];
-
         var fields = [
             { key: 'evapInTemp', suffix: '蒸发器进口 水温' },
             { key: 'evapOutTemp', suffix: '蒸发器出口 水温' },
@@ -203,64 +160,51 @@ class WebViewActivity : AppCompatActivity() {
                 var field = fields[f];
                 var val = unit.data[field.key];
                 if (val === undefined || val === null) continue;
-                totalTasks++;
-                (function(labelTitle, value) {
-                    fillNumberInputWithRetry(labelTitle, value, 5, function(ok) {
-                        if (ok) result.success.push(labelTitle);
-                        else result.failed.push(labelTitle);
-                        taskDone();
-                    });
-                })(unit.prefix + field.suffix, val);
+                var labelTitle = unit.prefix + field.suffix;
+                if (fillNumberInput(labelTitle, val)) {
+                    result.success.push(labelTitle);
+                } else {
+                    result.failed.push(labelTitle);
+                }
             }
             if (unit.data.pumps && Array.isArray(unit.data.pumps)) {
-                totalTasks++;
-                checkPumpByGroup(unit.prefix + '机组冷冻泵', unit.data.pumps, result);
-                taskDone();
+                var groupTitle = unit.prefix + '机组冷冻泵';
+                result.pumpsChecked += checkPumpByGroup(groupTitle, unit.data.pumps);
             }
             if (unit.data.remark) {
-                totalTasks++;
-                (function(labelTitle, text) {
-                    fillTextareaWithRetry(labelTitle, text, 3, function(ok) {
-                        if (ok) result.success.push(labelTitle);
-                        else result.failed.push(labelTitle);
-                        taskDone();
-                    });
-                })(unit.prefix + '螺杆机组备注', unit.data.remark);
+                var remarkTitle = unit.prefix + '螺杆机组备注';
+                if (fillTextarea(remarkTitle, unit.data.remark)) {
+                    result.success.push(remarkTitle);
+                } else {
+                    result.failed.push(remarkTitle);
+                }
             }
         }
-
-        if (totalTasks === 0) onComplete();
+        if (window.AndroidBridge && window.AndroidBridge.onFillComplete) {
+            AndroidBridge.onFillComplete(result.success.length);
+        }
     }
 
     window.fillScrewUnitForm = function(data) {
         var result = { success: [], failed: [], pumpsChecked: 0 };
-        switchTabAndWait('螺杆机组（特灵）', function(tabOk) {
-            if (!tabOk) {
+        switchTabAsync('螺杆机组（特灵）', function(ok) {
+            if (ok) {
+                doFill(data, result);
+            } else {
                 result.failed.push('切换标签页失败');
                 if (window.AndroidBridge && window.AndroidBridge.onFillComplete) {
                     AndroidBridge.onFillComplete(0);
                 }
-                return;
             }
-            setTimeout(function() {
-                doFillScrew(data, result, function() {
-                    if (window.AndroidBridge && window.AndroidBridge.onFillComplete) {
-                        AndroidBridge.onFillComplete(result.success.length);
-                    }
-                });
-            }, 100);
         });
         return JSON.stringify(result);
     };
 })();
 """
 
-        // 板交填充脚本（异步Tab切换 + 内容就绪检测 + 字段重试）
+        // 板交填充脚本（同样基于DOM方案）
         private const val JS_FILL_PLATE = """
 (function() {
-    if (window.__ocrFillEngineLoaded) return;
-    window.__ocrFillEngineLoaded = true;
-
     function findFormItemByLabel(labelTitle) {
         var items = document.querySelectorAll('.customFormItem');
         for (var i = 0; i < items.length; i++) {
@@ -274,10 +218,7 @@ class WebViewActivity : AppCompatActivity() {
         var start = Date.now();
         function check() {
             var el = document.querySelector(selector);
-            if (el) {
-                callback(el);
-                return;
-            }
+            if (el) { callback(el); return; }
             if (Date.now() - start < timeout) {
                 setTimeout(check, 200);
             } else {
@@ -287,7 +228,7 @@ class WebViewActivity : AppCompatActivity() {
         check();
     }
 
-    function switchTabAndWait(tabTitle, callback) {
+    function switchTabAsync(tabTitle, callback) {
         var tabSelector = '.sectionTabItem[title="' + tabTitle + '"]';
         waitForElement(tabSelector, 5000, function(tab) {
             if (!tab) {
@@ -295,92 +236,56 @@ class WebViewActivity : AppCompatActivity() {
                 return;
             }
             if (!tab.classList.contains('active')) tab.click();
-            waitForElement('.customFormItem', 5000, function(el) {
-                callback(el != null);
-            });
+            setTimeout(function() {
+                waitForElement('.customFormItem', 5000, function(el) {
+                    callback(el != null);
+                });
+            }, 200);
         });
     }
 
-    function fillNumberInputWithRetry(labelTitle, value, maxRetries, callback) {
-        if (maxRetries <= 0) {
-            callback(false);
-            return;
-        }
+    function fillNumberInput(labelTitle, value) {
         var formItem = findFormItemByLabel(labelTitle);
-        if (!formItem) {
-            setTimeout(function() {
-                fillNumberInputWithRetry(labelTitle, value, maxRetries - 1, callback);
-            }, 200);
-            return;
-        }
+        if (!formItem) return false;
         var inputBox = formItem.querySelector('.customFormControlBox');
-        if (!inputBox) {
-            callback(false);
-            return;
-        }
+        if (!inputBox) return false;
         inputBox.click();
-        setTimeout(function() {
-            var input = formItem.querySelector('input');
-            if (!input) {
-                var textSpan = inputBox.querySelector('.ellipsis:not(.Font13)');
-                if (textSpan) {
-                    textSpan.textContent = value;
-                    textSpan.classList.remove('Gray_bd');
-                    callback(true);
-                } else {
-                    callback(false);
-                }
-                return;
+        var input = formItem.querySelector('input');
+        if (!input) {
+            var textSpan = inputBox.querySelector('.ellipsis:not(.Font13)');
+            if (textSpan) {
+                textSpan.textContent = value;
+                textSpan.classList.remove('Gray_bd');
+                return true;
             }
-            input.value = value;
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            input.dispatchEvent(new Event('change', { bubbles: true }));
-            input.blur();
-            callback(true);
-        }, 100);
+            return false;
+        }
+        input.value = value;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        input.blur();
+        return true;
     }
 
-    function fillTextareaWithRetry(labelTitle, text, maxRetries, callback) {
-        if (maxRetries <= 0) {
-            callback(false);
-            return;
-        }
+    function fillTextarea(labelTitle, text) {
         var formItem = findFormItemByLabel(labelTitle);
-        if (!formItem) {
-            setTimeout(function() {
-                fillTextareaWithRetry(labelTitle, text, maxRetries - 1, callback);
-            }, 200);
-            return;
-        }
+        if (!formItem) return false;
         var textarea = formItem.querySelector('textarea');
-        if (!textarea) {
-            callback(false);
-            return;
-        }
+        if (!textarea) return false;
         textarea.value = text;
         textarea.dispatchEvent(new Event('input', { bubbles: true }));
         textarea.dispatchEvent(new Event('change', { bubbles: true }));
-        callback(true);
+        return true;
     }
 
-    function doFillPlate(data, result, onComplete) {
+    function doFill(data, result) {
         var groups = data.plateGroups;
-        if (!groups || !Array.isArray(groups)) {
-            onComplete();
-            return;
-        }
-        var totalTasks = 0;
-        var completedTasks = 0;
-        function taskDone() {
-            completedTasks++;
-            if (completedTasks >= totalTasks) onComplete();
-        }
-
+        if (!groups || !Array.isArray(groups)) return;
         for (var g = 0; g < groups.length; g++) {
             var group = groups[g];
             if (!group.groupTitle || !group.fields) continue;
             var fields = group.fields;
-            var fieldSuffixMap = {
+            var map = {
                 'inTemp': ' 进水温度',
                 'outTemp': ' 出水温度',
                 'inPressure': ' 进水压力',
@@ -388,49 +293,41 @@ class WebViewActivity : AppCompatActivity() {
                 'steamPressure': ' 蒸汽压力',
                 'pumpCurrent': ' 水泵电流'
             };
-            for (var key in fieldSuffixMap) {
-                if (fields.hasOwnProperty(key) && fields[key] !== null && fields[key] !== undefined) {
-                    totalTasks++;
-                    (function(labelTitle, value) {
-                        fillNumberInputWithRetry(labelTitle, value, 5, function(ok) {
-                            if (ok) result.success.push(labelTitle);
-                            else result.failed.push(labelTitle);
-                            taskDone();
-                        });
-                    })(group.groupTitle + fieldSuffixMap[key], fields[key]);
+            for (var key in map) {
+                if (fields[key] !== null && fields[key] !== undefined) {
+                    var title = group.groupTitle + map[key];
+                    if (fillNumberInput(title, fields[key])) {
+                        result.success.push(title);
+                    } else {
+                        result.failed.push(title);
+                    }
                 }
             }
             if (fields.remark) {
-                totalTasks++;
-                (function(labelTitle, text) {
-                    fillTextareaWithRetry(labelTitle, text, 3, function(ok) {
-                        if (ok) result.success.push(labelTitle);
-                        else result.failed.push(labelTitle);
-                        taskDone();
-                    });
-                })(group.groupTitle + ' 备注', fields.remark);
+                var remarkTitle = group.groupTitle + ' 备注';
+                if (fillTextarea(remarkTitle, fields.remark)) {
+                    result.success.push(remarkTitle);
+                } else {
+                    result.failed.push(remarkTitle);
+                }
             }
         }
-        if (totalTasks === 0) onComplete();
+        if (window.AndroidBridge && window.AndroidBridge.onFillComplete) {
+            AndroidBridge.onFillComplete(result.success.length);
+        }
     }
 
     window.fillPlateForm = function(data) {
         var result = { success: [], failed: [] };
-        switchTabAndWait('板交', function(tabOk) {
-            if (!tabOk) {
+        switchTabAsync('板交', function(ok) {
+            if (ok) {
+                doFill(data, result);
+            } else {
                 result.failed.push('切换标签页失败');
                 if (window.AndroidBridge && window.AndroidBridge.onFillComplete) {
                     AndroidBridge.onFillComplete(0);
                 }
-                return;
             }
-            setTimeout(function() {
-                doFillPlate(data, result, function() {
-                    if (window.AndroidBridge && window.AndroidBridge.onFillComplete) {
-                        AndroidBridge.onFillComplete(result.success.length);
-                    }
-                });
-            }, 100);
         });
         return JSON.stringify(result);
     };
@@ -534,7 +431,7 @@ class WebViewActivity : AppCompatActivity() {
                             view.evaluateJavascript(jsCall) { result ->
                                 DebugLogger.log("WebView", "填充触发: $result")
                             }
-                        }, 1500) // 等待 React 根组件挂载
+                        }, 1500)
                     } else {
                         view?.evaluateJavascript(fillJsPayload, null)
                     }
