@@ -19,7 +19,7 @@ class WebViewActivity : AppCompatActivity() {
     companion object {
         private const val WEB_LOAD_TIMEOUT_MS = 20_000L
 
-        // 螺杆机组填充脚本（健壮版：异步Tab切换 + 内容就绪检测 + 字段重试）
+        // 螺杆机组填充脚本（异步Tab切换 + 内容就绪检测 + 字段重试）
         private const val JS_FILL_SCREW = """
 (function() {
     if (window.__ocrFillEngineLoaded) return;
@@ -38,7 +38,6 @@ class WebViewActivity : AppCompatActivity() {
         return checkboxLabel.querySelector('.Checkbox-box .icon-ok') !== null;
     }
 
-    // 等待元素出现的通用重试函数
     function waitForElement(selector, timeout, callback) {
         var start = Date.now();
         function check() {
@@ -56,7 +55,6 @@ class WebViewActivity : AppCompatActivity() {
         check();
     }
 
-    // 切换Tab并等待内容渲染
     function switchTabAndWait(tabTitle, callback) {
         var tabSelector = '.sectionTabItem[title="' + tabTitle + '"]';
         waitForElement(tabSelector, 5000, function(tab) {
@@ -65,14 +63,12 @@ class WebViewActivity : AppCompatActivity() {
                 return;
             }
             if (!tab.classList.contains('active')) tab.click();
-            // 等待Tab内容区域出现至少一个customFormItem
             waitForElement('.customFormItem', 5000, function(el) {
                 callback(el != null);
             });
         });
     }
 
-    // 带重试的数值填充（防止组件延迟渲染）
     function fillNumberInputWithRetry(labelTitle, value, maxRetries, callback) {
         if (maxRetries <= 0) {
             callback(false);
@@ -157,7 +153,6 @@ class WebViewActivity : AppCompatActivity() {
             if (completedTasks >= totalTasks) onComplete();
         }
 
-        // 操作员（无重试，失败不影响整体）
         if (data.operator) {
             totalTasks++;
             var formItem = findFormItemByLabel('螺杆机组操作员');
@@ -217,13 +212,11 @@ class WebViewActivity : AppCompatActivity() {
                     });
                 })(unit.prefix + field.suffix, val);
             }
-            // 冷冻泵（无重试）
             if (unit.data.pumps && Array.isArray(unit.data.pumps)) {
                 totalTasks++;
                 checkPumpByGroup(unit.prefix + '机组冷冻泵', unit.data.pumps, result);
                 taskDone();
             }
-            // 备注
             if (unit.data.remark) {
                 totalTasks++;
                 (function(labelTitle, text) {
@@ -249,7 +242,6 @@ class WebViewActivity : AppCompatActivity() {
                 }
                 return;
             }
-            // 内容就绪后再填充（已由switchTabAndWait确保）
             setTimeout(function() {
                 doFillScrew(data, result, function() {
                     if (window.AndroidBridge && window.AndroidBridge.onFillComplete) {
@@ -263,7 +255,7 @@ class WebViewActivity : AppCompatActivity() {
 })();
 """
 
-        // 板交填充脚本（健壮版）
+        // 板交填充脚本（异步Tab切换 + 内容就绪检测 + 字段重试）
         private const val JS_FILL_PLATE = """
 (function() {
     if (window.__ocrFillEngineLoaded) return;
