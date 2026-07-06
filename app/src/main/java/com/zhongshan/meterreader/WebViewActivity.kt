@@ -17,7 +17,7 @@
 	class WebViewActivity : AppCompatActivity() {
 	    companion object {
 	        private const val WEB_LOAD_TIMEOUT_MS = 20_000L
-	        private const val AUTO_SCAN_INTERVAL_MS = 1500L // 间隔改长，给网页渲染时间
+	        private const val AUTO_SCAN_INTERVAL_MS = 1500L
 	    }
 	    internal lateinit var binding: ActivityWebviewBinding
 	    private var targetUrl   = ""
@@ -150,127 +150,107 @@
 	            }
 	            val parts = key.split("|")
 	            val fid   = parts[0].esc()
-	            // 表单里的 title 是 "1#蒸发器进口 水温"，这里把可能的多余空格去掉，提高匹配率
 	            val label = if (parts.size > 1) parts[1].replace(" ", "").esc() else ""
 	            val v     = values[i].esc()
 	            sb.append("targetData.push({id:'$fid', label:'$label', v:'$v'});\n")
 	        }
-	        // --- 自动切换标签页逻辑 ---
+	        val pumpArrayStr = pumpItems.joinToString(prefix = "[", postfix = "]") { "'${it.esc()}'" }
+	        sb.append("var pumpItems = $pumpArrayStr;\n")
 	        sb.append("""
+	            function getExpectedLabel(item) {
+	                var prefix = '';
+	                var m = item.id.match(/field_1_(\d+)/);
+	                if (m) {
+	                    var num = parseInt(m[1]);
+	                    if (num <= 20) prefix = '1#';
+	                    else if (num <= 40) prefix = '2#';
+	                    else if (num <= 60) prefix = '3#';
+	                }
+	                return prefix + item.label;
+	            }
 	            function clickTabIfNeeded() {
 	                if (targetData.length === 0) return;
 	                var needTab = null;
 	                var firstLabel = targetData[0].label || "";
 	                if(firstLabel.indexOf("板交") > -1 || firstLabel.indexOf("水汀") > -1 || firstLabel.indexOf("楼") > -1){
 	                    needTab = "板交";
-	                } else if (firstLabel.indexOf("蒸发器") > -1 || firstLabel.indexOf("冷凝器") > -1 || firstLabel.indexOf("压缩机") > -1 || firstLabel.indexOf("主机") > -1 || firstLabel.indexOf("电机") > -1 || firstLabel.indexOf("油压") > -1) {
+	                } else {
 	                    needTab = "螺杆机组";
 	                }
-	                if (needTab) {
-	                    // 根据真实 HTML，使用 .sectionTabItem
-	                    var tabs = document.querySelectorAll('.sectionTabItem');
-	                    for(var i=0; i<tabs.length; i++){
-	                        var text = (tabs[i].innerText || '').trim();
-	                        if(text.indexOf(needTab) > -1) {
-	                            var isActive = tabs[i].className.indexOf('active') > -1;
-	                            if(!isActive) {
-	                                tabs[i].click();
-	                                AndroidBridge.log('已自动点击切换到 Tab: ' + text);
-	                            }
-	                            return;
+	                var tabs = document.querySelectorAll('.sectionTabItem');
+	                for(var i=0; i<tabs.length; i++){
+	                    var text = (tabs[i].innerText || '').trim();
+	                    if(text.indexOf(needTab) > -1) {
+	                        var isActive = tabs[i].className.indexOf('active') > -1;
+	                        if(!isActive) {
+	                            tabs[i].click();
+	                            AndroidBridge.log('已自动点击切换到 Tab: ' + text);
 	                        }
+	                        return;
 	                    }
 	                }
 	            }
-	        """)
-	        // --- 核心填表逻辑 ---
-	        sb.append("""
 	            window.__ocrLastFilledCount = -1;
-	            window.__lastPrintTime = 0;
 	            function scanAndAutofillEngine(){
-	                // 1. 尝试切换 Tab
-	                clickTabIfNeeded();
-	                var currentFilled = 0;
-	                // 2. 遍历所有需要填写的字段
-	                for(var i=0; i<targetData.length; i++){
-	                    var item = targetData[i];
-	                    // 表单里的 title 包含空格，如 "1#蒸发器进口 水温"，我们需要匹配这个
-	                    var cleanLabel = item.label;
-	                    // 查找对应的表单项容器
+	                try {
+	                    clickTabIfNeeded();
+	                    var currentFilled = 0;
 	                    var formItems = document.querySelectorAll('.customFormItem');
-	                    for(var j=0; j<formItems.length; j++){
-	                        var labelDiv = formItems[j].querySelector('.controlLabelName');
-	                        if(!labelDiv) continue;
-	                        var labelText = (labelDiv.innerText || labelDiv.textContent || '').replace(/\s+/g, '');
-	                        if(labelText === cleanLabel) {
-	                            // 找到匹配的表单项了！
-	                            var controlBox = formItems[j].querySelector('.customFormControlBox');
-	                            if(controlBox) {
-	                                // 检查是否已经填过
-	                                var spanVal = controlBox.querySelector('span.sc-jgwFWF') || controlBox.querySelector('span.WordBreak');
-	                                if(spanVal) {
-	                                    var currentText = (spanVal.innerText || '').trim();
-	                                    if(currentText === item.v) {
-	                                        currentFilled++;
-	                                        continue;
-	                                    }
-	                                    // 如果是 "请填写数值" 或 "请填写文本内容"，说明是空的，需要填
-	                                    if(currentText.indexOf('请填写') > -1 || currentText !== item.v) {
+	                    if (formItems.length === 0) return;
+	                    for(var i=0; i<targetData.length; i++){
+	                        var item = targetData[i];
+	                        var expectedLabel = getExpectedLabel(item);
+	                        var found = false;
+	                        for(var j=0; j<formItems.length; j++){
+	                            var labelDiv = formItems[j].querySelector('.controlLabelName');
+	                            if(!labelDiv) continue;
+	                            var labelText = (labelDiv.innerText || '').replace(/\s+/g, '').replace(/\u3000/g, '');
+	                            if(labelText === expectedLabel) {
+	                                found = true;
+	                                var controlBox = formItems[j].querySelector('.customFormControlBox');
+	                                if(controlBox) {
+	                                    var spanVal = controlBox.querySelector('span.sc-jgwFWF') || controlBox.querySelector('span.WordBreak');
+	                                    if(spanVal) {
 	                                        spanVal.innerText = item.v;
-	                                        // 触发事件让框架感知
 	                                        controlBox.dispatchEvent(new Event('input', { bubbles: true }));
 	                                        controlBox.dispatchEvent(new Event('change', { bubbles: true }));
 	                                        controlBox.dispatchEvent(new Event('blur', { bubbles: true }));
-	                                        AndroidBridge.log('填入值: ' + item.label + ' = ' + item.v);
+	                                        AndroidBridge.log('已填入: ' + expectedLabel + ' = ' + item.v);
 	                                        currentFilled++;
 	                                    }
 	                                }
+	                                break;
 	                            }
-	                            break;
+	                        }
+	                        if(!found) {
+	                            AndroidBridge.log('未找到匹配项: ' + expectedLabel + ' (原始: ' + item.label + ')');
 	                        }
 	                    }
-	                }
-	        """)
-	        // 3. 处理冷冻泵勾选框
-	        val pumpArrayStr = pumpItems.joinToString(prefix = "[", postfix = "]") { "'${it.esc()}'" }
-	        sb.append("var pumpItems = $pumpArrayStr;\n")
-	        sb.append("""
-	                // 3. 勾选冷冻泵
-	                for(var k=0; k<pumpItems.length; k++){
-	                    var pumpName = pumpItems[k];
-	                    var pumpLabels = document.querySelectorAll('label.ming.Checkbox');
-	                    for(var m=0; m<pumpLabels.length; m++){
-	                        var pTitle = pumpLabels[m].getAttribute('title') || '';
-	                        if(pTitle === pumpName) {
-	                            var checkboxBox = pumpLabels[m].querySelector('.Checkbox-box');
-	                            // 如果未勾选，且没有 ocr 填充标记，则点击
-	                            if(checkboxBox && checkboxBox.className.indexOf('Checkbox-checked') === -1 && pumpLabels[m].getAttribute('data-ocr-filled') !== 'true') {
-	                                pumpLabels[m].click();
-	                                pumpLabels[m].setAttribute('data-ocr-filled', 'true');
-	                                AndroidBridge.log('已勾选: ' + pumpName);
+	                    // 冷冻泵勾选
+	                    for(var k=0; k<pumpItems.length; k++){
+	                        var pumpName = pumpItems[k];
+	                        var pumpLabels = document.querySelectorAll('label.ming.Checkbox');
+	                        for(var m=0; m<pumpLabels.length; m++){
+	                            var pTitle = pumpLabels[m].getAttribute('title') || '';
+	                            if(pTitle === pumpName) {
+	                                var checkboxBox = pumpLabels[m].querySelector('.Checkbox-box');
+	                                if(checkboxBox && checkboxBox.className.indexOf('Checkbox-checked') === -1 && pumpLabels[m].getAttribute('data-ocr-filled') !== 'true') {
+	                                    pumpLabels[m].click();
+	                                    pumpLabels[m].setAttribute('data-ocr-filled', 'true');
+	                                    AndroidBridge.log('已勾选: ' + pumpName);
+	                                }
+	                                currentFilled++;
 	                            }
-	                            currentFilled++;
 	                        }
 	                    }
-	                }
-	                // 如果没填全，每 3 秒打印一次当前页面的 div 详情供调试
-	                if (currentFilled < targetData.length + pumpItems.length) {
-	                    if (!window.__lastPrintTime || Date.now() - window.__lastPrintTime > 3000) {
-	                        window.__lastPrintTime = Date.now();
-	                        var boxes = document.querySelectorAll('.customFormControlBox span.sc-jgwFWF, .customFormControlBox span.WordBreak');
-	                        var logMsg = '\n=== 当前可见数值框 (共 ' + boxes.length + ' 个) ===\n';
-	                        for (var n = 0; n < boxes.length && n < 15; n++) {
-	                            var el = boxes[n];
-	                            logMsg += 'Value[' + n + ']: "' + (el.innerText||'') + '"\n';
+	                    if(currentFilled !== window.__ocrLastFilledCount){
+	                        window.__ocrLastFilledCount = currentFilled;
+	                        if(window.AndroidBridge && window.AndroidBridge.onFillComplete){
+	                            AndroidBridge.onFillComplete(currentFilled);
 	                        }
-	                        AndroidBridge.domLog(logMsg);
 	                    }
-	                }
-	                if(currentFilled !== window.__ocrLastFilledCount){
-	                    window.__ocrLastFilledCount = currentFilled;
-	                    if(window.AndroidBridge && window.AndroidBridge.onFillComplete){
-	                        AndroidBridge.onFillComplete(currentFilled);
-	                    }
+	                } catch(e) {
+	                    AndroidBridge.log('填表引擎异常: ' + e.message);
 	                }
 	            }
 	            setInterval(scanAndAutofillEngine, $AUTO_SCAN_INTERVAL_MS);
