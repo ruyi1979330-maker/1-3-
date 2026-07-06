@@ -150,13 +150,13 @@ class WebViewActivity : AppCompatActivity() {
                                 fields.add(Pair(fullLabel, unitObj.getString(key)))
                             }
                         }
-                    }
-                }
-                // 冷冻泵数组在JSON根层级，从根对象读取
-                if (root.has("pumps")) {
-                    val pumpArr = root.getJSONArray("pumps")
-                    for (i in 0 until pumpArr.length()) {
-                        pumps.add(pumpArr.getString(i))
+                        // 修复：冷冻泵数组在机组对象内部，从unitObj读取
+                        if (unitObj.has("pumps")) {
+                            val pumpArr = unitObj.getJSONArray("pumps")
+                            for (i in 0 until pumpArr.length()) {
+                                pumps.add(pumpArr.getString(i))
+                            }
+                        }
                     }
                 }
             } else if (fillType == "plate") {
@@ -244,7 +244,7 @@ class WebViewActivity : AppCompatActivity() {
     }
 
     /**
-     * 编译填表JS：修复所有匹配与赋值问题，兼容明道云React自定义表单
+     * 编译填表JS：修复React赋值不显示、冷冻泵读取路径、首轮匹配失败问题
      */
     private fun compileFillJs(
         fields: List<Pair<String, String>>,
@@ -269,6 +269,10 @@ class WebViewActivity : AppCompatActivity() {
             window.__ocrLastFilledCount = -1;
             var idleScanCount = 0;
             var scanTimer = null;
+            
+            // 核心修复：缓存原生value setter，绕开React属性拦截，保证填入值真实显示
+            var inputValueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+            var textareaValueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
 
             // 文本标准化：去所有空白字符，用于精准匹配
             function cleanText(text) {
@@ -294,18 +298,16 @@ class WebViewActivity : AppCompatActivity() {
 
             // 展开所有折叠分组（修复选择器：type属性在control子元素上）
             function expandAllGroups() {
-                // 正确选择带有type=22的分组控件
                 var groupControls = document.querySelectorAll('.customFormItemControl[type="22"]');
                 for (var i = 0; i < groupControls.length; i++) {
                     var arrow = groupControls[i].querySelector('.headerArrow .icon-arrow-down-border');
                     if (arrow) {
-                        // 向下箭头=折叠状态，点击标题区域展开
                         groupControls[i].querySelector('.titleBox').click();
                     }
                 }
             }
 
-            // 给自定义输入框赋值（兼容React异步渲染、textarea同级结构）
+            // 修复：React兼容赋值，填入后页面真实可见，不会被框架冲空
             function setInputValue(formItem, value) {
                 if (!formItem) return false;
                 
@@ -315,26 +317,28 @@ class WebViewActivity : AppCompatActivity() {
                 // 先激活输入框
                 controlBox.click();
 
-                // 1. 查找原生input（数值输入框）
+                // 1. 数值输入框：原生setter赋值 + 完整事件链
                 var input = formItem.querySelector('input');
                 if (input) {
-                    input.value = value;
+                    inputValueSetter.call(input, value);
                     input.dispatchEvent(new Event('input', { bubbles: true }));
                     input.dispatchEvent(new Event('change', { bubbles: true }));
                     input.dispatchEvent(new Event('blur', { bubbles: true }));
-                    return true;
+                    // 校验写入结果，杜绝假成功
+                    return input.value === String(value);
                 }
 
-                // 2. 查找textarea（备注字段，在controlBox同级父容器内）
+                // 2. 多行备注textarea：同样使用原生setter
                 var textarea = formItem.querySelector('textarea');
                 if (textarea) {
-                    textarea.value = value;
+                    textareaValueSetter.call(textarea, value);
                     textarea.dispatchEvent(new Event('input', { bubbles: true }));
                     textarea.dispatchEvent(new Event('change', { bubbles: true }));
-                    return true;
+                    textarea.dispatchEvent(new Event('blur', { bubbles: true }));
+                    return textarea.value === String(value);
                 }
 
-                // 3. 兜底：修改显示文本（确保界面可见）
+                // 3. 兜底：修改显示文本
                 var displaySpan = controlBox.querySelector('.sc-jgwFWF, .WordBreak');
                 if (displaySpan) {
                     displaySpan.innerText = value;
