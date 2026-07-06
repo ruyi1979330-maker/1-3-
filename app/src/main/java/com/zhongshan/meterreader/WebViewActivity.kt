@@ -1,3 +1,4 @@
+// 文件名: WebViewActivity.kt
 package com.zhongshan.meterreader
 
 import android.annotation.SuppressLint
@@ -11,31 +12,282 @@ import android.view.View
 import android.webkit.*
 import androidx.appcompat.app.AppCompatActivity
 import com.zhongshan.meterreader.databinding.ActivityWebviewBinding
+import org.json.JSONArray
+import org.json.JSONObject
 import java.lang.ref.WeakReference
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 
 class WebViewActivity : AppCompatActivity() {
 
     companion object {
         private const val WEB_LOAD_TIMEOUT_MS = 20_000L
-        private const val AUTO_SCAN_INTERVAL_MS = 500L
+
+        // 螺杆机组填充脚本
+        private const val JS_FILL_SCREW = """
+(function() {
+    function findFormItemByLabel(labelTitle) {
+        var items = document.querySelectorAll('.customFormItem');
+        for (var i = 0; i < items.length; i++) {
+            var label = items[i].querySelector('.controlLabelName[title="' + labelTitle + '"]');
+            if (label) return items[i];
+        }
+        return null;
+    }
+
+    function isCheckboxChecked(checkboxLabel) {
+        return checkboxLabel.querySelector('.Checkbox-box .icon-ok') !== null;
+    }
+
+    function switchToScrewTab() {
+        var tab = document.querySelector('.sectionTabItem[title="螺杆机组（特灵）"]');
+        if (!tab) return false;
+        if (!tab.classList.contains('active')) tab.click();
+        return true;
+    }
+
+    function fillNumberInput(labelTitle, value) {
+        var formItem = findFormItemByLabel(labelTitle);
+        if (!formItem) return false;
+        var inputBox = formItem.querySelector('.customFormControlBox');
+        if (!inputBox) return false;
+        inputBox.click();
+        var input = formItem.querySelector('input');
+        if (!input) {
+            var textSpan = inputBox.querySelector('.ellipsis:not(.Font13)');
+            if (textSpan) {
+                textSpan.textContent = value;
+                textSpan.classList.remove('Gray_bd');
+                return true;
+            }
+            return false;
+        }
+        input.value = value;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        input.blur();
+        return true;
+    }
+
+    function checkPumpByGroup(groupTitle, pumpNames) {
+        var groupItem = findFormItemByLabel(groupTitle);
+        if (!groupItem) return 0;
+        var count = 0;
+        for (var i = 0; i < pumpNames.length; i++) {
+            if (pumpNames[i] === '全选') continue; // 跳过全选按钮
+            var checkbox = groupItem.querySelector('label.ming.Checkbox[title="' + pumpNames[i] + '"]');
+            if (checkbox && !isCheckboxChecked(checkbox)) {
+                checkbox.click();
+                count++;
+            }
+        }
+        return count;
+    }
+
+    function fillTextarea(labelTitle, text) {
+        var formItem = findFormItemByLabel(labelTitle);
+        if (!formItem) return false;
+        var textarea = formItem.querySelector('textarea');
+        if (!textarea) return false;
+        textarea.value = text;
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        textarea.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+    }
+
+    window.fillScrewUnitForm = function(data) {
+        var result = { success: [], failed: [], pumpsChecked: 0 };
+        if (!switchToScrewTab()) {
+            result.failed.push('切换标签页失败');
+            return JSON.stringify(result);
+        }
+        setTimeout(function() {
+            if (data.operator) {
+                var formItem = findFormItemByLabel('螺杆机组操作员');
+                if (formItem) {
+                    var selectInput = formItem.querySelector('input');
+                    if (selectInput) {
+                        selectInput.value = data.operator;
+                        selectInput.dispatchEvent(new Event('input', { bubbles: true }));
+                        result.success.push('螺杆机组操作员');
+                    } else { result.failed.push('螺杆机组操作员'); }
+                } else { result.failed.push('螺杆机组操作员'); }
+            }
+
+            var units = [
+                { no: 1, prefix: '1#', data: data.unit1 },
+                { no: 2, prefix: '2#', data: data.unit2 },
+                { no: 3, prefix: '3#', data: data.unit3 }
+            ];
+
+            var fields = [
+                { key: 'evapInTemp', suffix: '蒸发器进口 水温' },
+                { key: 'evapOutTemp', suffix: '蒸发器出口 水温' },
+                { key: 'evapInPressure', suffix: '蒸发器进口 水压' },
+                { key: 'evapOutPressure', suffix: '蒸发器出口 水压' },
+                { key: 'evapRefPressure', suffix: '蒸发器 冷媒压力' },
+                { key: 'evapTemp', suffix: '蒸发器 蒸发温度' },
+                { key: 'condInTemp', suffix: '冷凝器进口 水温' },
+                { key: 'condOutTemp', suffix: '冷凝器出口 水温' },
+                { key: 'condInPressure', suffix: '冷凝器进口 水压' },
+                { key: 'condOutPressure', suffix: '冷凝器出口 水压' },
+                { key: 'condRefPressure', suffix: '冷凝器 冷媒压力' },
+                { key: 'condTemp', suffix: '冷凝器 冷凝温度' },
+                { key: 'compOilPressure', suffix: '压缩机 油压' },
+                { key: 'compDischargeTemp', suffix: '压缩机 排出口温度' },
+                { key: 'motorCurrent', suffix: '电机电流' },
+                { key: 'hostLoad', suffix: ' 主机负载' }
+            ];
+
+            for (var u = 0; u < units.length; u++) {
+                var unit = units[u];
+                if (!unit.data) continue;
+                for (var f = 0; f < fields.length; f++) {
+                    var field = fields[f];
+                    var val = unit.data[field.key];
+                    if (val === undefined || val === null) continue;
+                    var labelTitle = unit.prefix + field.suffix;
+                    if (fillNumberInput(labelTitle, val)) {
+                        result.success.push(labelTitle);
+                    } else {
+                        result.failed.push(labelTitle);
+                    }
+                }
+                if (unit.data.pumps && Array.isArray(unit.data.pumps)) {
+                    var groupTitle = unit.prefix + '机组冷冻泵';
+                    result.pumpsChecked += checkPumpByGroup(groupTitle, unit.data.pumps);
+                }
+                if (unit.data.remark) {
+                    var remarkTitle = unit.prefix + '螺杆机组备注';
+                    if (fillTextarea(remarkTitle, unit.data.remark)) {
+                        result.success.push(remarkTitle);
+                    } else {
+                        result.failed.push(remarkTitle);
+                    }
+                }
+            }
+
+            if (window.AndroidBridge && window.AndroidBridge.onFillComplete) {
+                AndroidBridge.onFillComplete(result.success.length);
+            }
+        }, 300);
+        return JSON.stringify(result);
+    };
+})();
+"""
+
+        // 板交填充脚本（数据驱动，适配不同分组字段数量）
+        private const val JS_FILL_PLATE = """
+(function() {
+    function findFormItemByLabel(labelTitle) {
+        var items = document.querySelectorAll('.customFormItem');
+        for (var i = 0; i < items.length; i++) {
+            var label = items[i].querySelector('.controlLabelName[title="' + labelTitle + '"]');
+            if (label) return items[i];
+        }
+        return null;
+    }
+
+    function switchToPlateTab() {
+        var tab = document.querySelector('.sectionTabItem[title="板交"]');
+        if (!tab) return false;
+        if (!tab.classList.contains('active')) tab.click();
+        return true;
+    }
+
+    function fillNumberInput(labelTitle, value) {
+        var formItem = findFormItemByLabel(labelTitle);
+        if (!formItem) return false;
+        var inputBox = formItem.querySelector('.customFormControlBox');
+        if (!inputBox) return false;
+        inputBox.click();
+        var input = formItem.querySelector('input');
+        if (!input) {
+            var textSpan = inputBox.querySelector('.ellipsis:not(.Font13)');
+            if (textSpan) {
+                textSpan.textContent = value;
+                textSpan.classList.remove('Gray_bd');
+                return true;
+            }
+            return false;
+        }
+        input.value = value;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        input.blur();
+        return true;
+    }
+
+    function fillTextarea(labelTitle, text) {
+        var formItem = findFormItemByLabel(labelTitle);
+        if (!formItem) return false;
+        var textarea = formItem.querySelector('textarea');
+        if (!textarea) return false;
+        textarea.value = text;
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        textarea.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+    }
+
+    window.fillPlateForm = function(data) {
+        var result = { success: [], failed: [] };
+        if (!switchToPlateTab()) {
+            result.failed.push('切换标签页失败');
+            return JSON.stringify(result);
+        }
+        setTimeout(function() {
+            var groups = data.plateGroups;
+            if (!groups || !Array.isArray(groups)) return;
+            for (var g = 0; g < groups.length; g++) {
+                var group = groups[g];
+                if (!group.groupTitle || !group.fields) continue;
+                var fields = group.fields;
+                // 遍历实际传入的字段，按 key 确定 title 后缀
+                var fieldSuffixMap = {
+                    'inTemp': ' 进水温度',
+                    'outTemp': ' 出水温度',
+                    'inPressure': ' 进水压力',
+                    'outPressure': ' 出水压力',
+                    'steamPressure': ' 蒸汽压力',
+                    'pumpCurrent': ' 水泵电流'
+                };
+                for (var key in fieldSuffixMap) {
+                    if (fields.hasOwnProperty(key) && fields[key] !== null && fields[key] !== undefined) {
+                        var labelTitle = group.groupTitle + fieldSuffixMap[key];
+                        if (fillNumberInput(labelTitle, fields[key])) {
+                            result.success.push(labelTitle);
+                        } else {
+                            result.failed.push(labelTitle);
+                        }
+                    }
+                }
+                if (fields.remark) {
+                    var remarkTitle = group.groupTitle + ' 备注';
+                    if (fillTextarea(remarkTitle, fields.remark)) {
+                        result.success.push(remarkTitle);
+                    } else {
+                        result.failed.push(remarkTitle);
+                    }
+                }
+            }
+            if (window.AndroidBridge && window.AndroidBridge.onFillComplete) {
+                AndroidBridge.onFillComplete(result.success.length);
+            }
+        }, 300);
+        return JSON.stringify(result);
+    };
+})();
+"""
     }
 
     internal lateinit var binding: ActivityWebviewBinding
     private var targetUrl   = ""
-    private var fillJsPayload = ""
+    private var fillJsPayload = ""          // 保留旧版（未使用）
+    private var fillDataJson: String? = null
+    private var fillScriptType: String? = null // "screw" 或 "plate"
 
-    private val timeoutHandler      = Handler(Looper.getMainLooper())
-    private val pageLoadGeneration  = AtomicInteger(0)
-    private val isFillDone          = AtomicBoolean(false)
-
-    private fun String.esc() =
-        replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "")
+    private val timeoutHandler = Handler(Looper.getMainLooper())
 
     class SafeWebBridge(activity: WebViewActivity) {
         private val ref = WeakReference(activity)
-
         @JavascriptInterface
         fun onFillComplete(count: Int) {
             ref.get()?.runOnUiThread {
@@ -49,7 +301,6 @@ class WebViewActivity : AppCompatActivity() {
                 }
             }
         }
-        
         @JavascriptInterface
         fun log(msg: String) {
             Log.d("WebViewJS", msg)
@@ -59,19 +310,23 @@ class WebViewActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         @Suppress("DEPRECATION")
         WebView.setWebContentsDebuggingEnabled(true)
-
         binding = ActivityWebviewBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
         targetUrl = intent.getStringExtra("EXTRA_URL") ?: ""
-        val keys    = intent.getStringArrayExtra("EXTRA_KEYS")    ?: emptyArray()
-        val values  = intent.getStringArrayExtra("EXTRA_VALUES")  ?: emptyArray()
-        val pumpIds = intent.getStringArrayExtra("EXTRA_PUMP_IDS")?: emptyArray()
+        fillDataJson = intent.getStringExtra("EXTRA_FILL_DATA_JSON")
+        fillScriptType = intent.getStringExtra("EXTRA_FILL_TYPE")
 
-        fillJsPayload = compileFillJs(keys, values, pumpIds)
+        // 旧版兼容
+        if (fillDataJson == null) {
+            val keys    = intent.getStringArrayExtra("EXTRA_KEYS")    ?: emptyArray()
+            val values  = intent.getStringArrayExtra("EXTRA_VALUES")  ?: emptyArray()
+            val pumpIds = intent.getStringArrayExtra("EXTRA_PUMP_IDS")?: emptyArray()
+            fillJsPayload = compileFillJs(keys, values, pumpIds)
+        }
+
         initWebView()
         if (targetUrl.isNotEmpty()) binding.webView.loadUrl(targetUrl)
     }
@@ -87,37 +342,49 @@ class WebViewActivity : AppCompatActivity() {
 
         binding.webView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                isFillDone.set(false)
                 binding.progressBar.visibility      = View.VISIBLE
                 binding.tvStatusBanner.visibility   = View.VISIBLE
                 binding.tvStatusBanner.text = "⏳ 正在连接数据中心，请稍候…"
-
-                val gen = pageLoadGeneration.incrementAndGet()
                 timeoutHandler.postDelayed({
-                    if (pageLoadGeneration.get() == gen) {
-                        binding.progressBar.visibility    = View.GONE
-                        binding.webView.stopLoading()
-                        binding.layoutNetworkError.visibility = View.VISIBLE
-                        binding.tvErrorMsg.text = "网络超时，请检查信号后重试。"
-                        binding.tvStatusBanner.visibility = View.GONE
-                    }
+                    binding.progressBar.visibility    = View.GONE
+                    binding.webView.stopLoading()
+                    binding.layoutNetworkError.visibility = View.VISIBLE
+                    binding.tvErrorMsg.text = "网络超时，请检查信号后重试。"
+                    binding.tvStatusBanner.visibility = View.GONE
                 }, WEB_LOAD_TIMEOUT_MS)
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
-                pageLoadGeneration.incrementAndGet()
+                timeoutHandler.removeCallbacksAndMessages(null)
                 binding.progressBar.visibility = View.GONE
                 val host = runCatching { android.net.Uri.parse(url ?: "").host }.getOrNull() ?: ""
                 if (host.contains("zs-hospital") || url?.contains("zs-hospital") == true || host.isNotEmpty()) {
                     binding.tvStatusBanner.visibility = View.VISIBLE
                     binding.tvStatusBanner.text = "🎉 连接成功！引擎已启动..."
-                    view?.evaluateJavascript(fillJsPayload, null)
+
+                    if (fillDataJson != null) {
+                        val jsScript = when (fillScriptType) {
+                            "screw" -> JS_FILL_SCREW
+                            "plate" -> JS_FILL_PLATE
+                            else -> JS_FILL_SCREW
+                        }
+                        view?.evaluateJavascript(jsScript, null)
+                        view?.postDelayed({
+                            val functionName = if (fillScriptType == "plate") "fillPlateForm" else "fillScrewUnitForm"
+                            val jsCall = "$functionName($fillDataJson)"
+                            view.evaluateJavascript(jsCall) { result ->
+                                DebugLogger.log("WebView", "填充结果: $result")
+                            }
+                        }, 800)
+                    } else {
+                        view?.evaluateJavascript(fillJsPayload, null)
+                    }
                 }
             }
 
             override fun onReceivedError(view: WebView?, req: WebResourceRequest?, err: WebResourceError?) {
                 if (req?.isForMainFrame == true) {
-                    pageLoadGeneration.incrementAndGet()
+                    timeoutHandler.removeCallbacksAndMessages(null)
                     binding.progressBar.visibility        = View.GONE
                     binding.layoutNetworkError.visibility = View.VISIBLE
                     binding.tvErrorMsg.text               = "加载失败，请检查是否连接医院内网 Wi-Fi。"
@@ -131,349 +398,17 @@ class WebViewActivity : AppCompatActivity() {
 
         binding.btnRetryNetwork.setOnClickListener {
             binding.layoutNetworkError.visibility = View.GONE
-            isFillDone.set(false)
             if (targetUrl.isNotEmpty()) binding.webView.loadUrl(targetUrl)
         }
     }
 
     private fun compileFillJs(keys: Array<String>, values: Array<String>, pumpIds: Array<String>): String {
         val sb = StringBuilder()
-        
         sb.append("(function(){\n")
         sb.append("if(window.__ocrFillEngineStarted) return;\n")
         sb.append("window.__ocrFillEngineStarted = true;\n")
-
-        // 全选 CSS 修复
-        sb.append("""
-            var style=document.createElement('style');
-            style.innerHTML=`
-                .el-table__header-wrapper .el-checkbox__label,
-                .el-table__header .el-checkbox__label { visibility: hidden; position: relative; }
-                .el-table__header-wrapper .el-checkbox__label:after,
-                .el-table__header .el-checkbox__label:after {
-                    content: '全选'; visibility: visible !important;
-                    position: absolute; left: 0; top: 0;
-                    white-space: nowrap; color: #606266;
-                }
-                label[title='Select All'] .Checkbox-text,
-                label[title='Select All'] .Font13 { visibility: hidden; font-size: 0; }
-                label[title='Select All'] { position: relative; }
-                label[title='Select All']::after {
-                    content: '全选'; visibility: visible;
-                    position: absolute; left: 20px; top: 50%;
-                    transform: translateY(-50%);
-                    white-space: nowrap; font-size: 13px; color: #606266;
-                }
-            `;
-            document.head.appendChild(style);
-        """)
-
-        sb.append("var targetData = [];\n")
-        for (i in keys.indices) {
-            val parts = keys[i].split("|")
-            val fid   = parts[0].esc()
-            val label = if (parts.size > 1) parts[1].esc() else ""
-            val v     = values[i].esc()
-            sb.append("targetData.push({id:'$fid', label:'$label', v:'$v'});\n")
-        }
-
-        // 推断主流机组前缀
-        sb.append("""
-            var dominantMachinePrefix = null;
-            var prefixCount = {};
-            for(var i=0; i<targetData.length; i++){
-                var m = targetData[i].label.match(/^(\\d+#)/);
-                if(m){
-                    var p = m[1];
-                    prefixCount[p] = (prefixCount[p]||0)+1;
-                }
-            }
-            var maxCount = 0;
-            for(var p in prefixCount){
-                if(prefixCount[p] > maxCount){
-                    maxCount = prefixCount[p];
-                    dominantMachinePrefix = p;
-                }
-            }
-            AndroidBridge.log('主流机组前缀: ' + dominantMachinePrefix);
-        """)
-
-        sb.append("""
-            function getLabelText(item) {
-                var t = item.label.replace(/\\s+/g, '')
-                                   .replace(/[（(].*?[)）]/g, '')
-                                   .replace(/[【\\[].*?[\\]】]/g, '');
-                t = t.replace(/[：:]/g, '').replace(/[，,]/g, '');
-                return t;
-            }
-
-            function getLabelVariants(label) {
-                var base = getLabelText({label: label});
-                var variants = [base];
-                if(base.indexOf('进水') > -1) variants.push(base.replace('进水','进口'));
-                if(base.indexOf('进口') > -1) variants.push(base.replace('进口','进水'));
-                if(base.indexOf('出水') > -1) variants.push(base.replace('出水','出口'));
-                if(base.indexOf('出口') > -1) variants.push(base.replace('出口','出水'));
-                if(base.indexOf('返回') > -1) variants.push(base.replace('返回','回水'));
-                if(base.indexOf('回水') > -1) variants.push(base.replace('回水','返回'));
-                if(base.indexOf('冷媒') > -1) variants.push(base.replace('冷媒','制冷剂'));
-                if(base.indexOf('制冷剂') > -1) variants.push(base.replace('制冷剂','冷媒'));
-                if(base.indexOf('压力') > -1) variants.push(base.replace('压力','压强'));
-                if(base.indexOf('温度') > -1) variants.push(base.replace('温度','温'));
-                if(base.indexOf('排口') > -1) { variants.push(base.replace('排口','排出口')); variants.push(base.replace('排口','排出')); }
-                if(base.indexOf('排出口') > -1) { variants.push(base.replace('排出口','排口')); variants.push(base.replace('排出口','排出')); }
-                if(base.indexOf('排出') > -1) { variants.push(base.replace('排出','排口')); variants.push(base.replace('排出','排出口')); }
-                if(base.indexOf('导液开度') > -1) variants.push(base.replace('导液开度','滑阀位置'));
-                if(base.indexOf('滑阀位置') > -1) variants.push(base.replace('滑阀位置','导液开度'));
-                if(base.indexOf('主机负载') > -1) variants.push(base.replace('主机负载','%RLA'));
-                if(base.indexOf('油压') > -1 && base.indexOf('油压差') === -1) variants.push(base.replace('油压','油压差'));
-                if(base.indexOf('油压差') > -1) variants.push(base.replace('油压差','油压'));
-                if(base.indexOf('油箱温度') > -1) { variants.push(base.replace('油箱温度','油槽温度')); variants.push(base.replace('油箱温度','油温')); }
-                if(base.indexOf('油槽温度') > -1) { variants.push(base.replace('油槽温度','油箱温度')); variants.push(base.replace('油槽温度','油温')); }
-                if(base.indexOf('油温') > -1) { variants.push(base.replace('油温','油箱温度')); variants.push(base.replace('油温','油槽温度')); }
-                if(base.indexOf('蒸发温度') > -1) variants.push(base.replace('蒸发温度','蒸发器饱和温度'));
-                if(base.indexOf('饱和温度') > -1) {
-                    if(base.indexOf('蒸发') > -1) variants.push(base.replace('蒸发器饱和温度','蒸发温度'));
-                    if(base.indexOf('冷凝') > -1) variants.push(base.replace('冷凝器饱和温度','冷凝温度'));
-                }
-                if(base.indexOf('冷凝温度') > -1) variants.push(base.replace('冷凝温度','冷凝器饱和温度'));
-                if(base.indexOf('电机电流') > -1) variants.push(base.replace('电机电流','电流'));
-                if(base.indexOf('排出口温度') > -1) variants.push(base.replace('排出口温度','排出端冷剂温度'));
-                if(!(/^\\d+#/).test(base) && dominantMachinePrefix){
-                    variants.push(dominantMachinePrefix + base);
-                    var withPrefix = [];
-                    for(var v=0; v<variants.length; v++){
-                        if(!(/^\\d+#/).test(variants[v])){
-                            withPrefix.push(dominantMachinePrefix + variants[v]);
-                        }
-                    }
-                    variants = variants.concat(withPrefix);
-                }
-                var unique = [];
-                for(var i=0; i<variants.length; i++){
-                    if(unique.indexOf(variants[i]) === -1) unique.push(variants[i]);
-                }
-                return unique;
-            }
-
-            function isValidInput(el){
-                if(!el) return false;
-                var tag = (el.tagName || '').toUpperCase();
-                if(tag !== 'INPUT' && tag !== 'TEXTAREA') return false;
-                var type = (el.type || '').toLowerCase();
-                if(['checkbox', 'radio', 'hidden', 'button', 'submit', 'file'].indexOf(type) > -1) return false;
-                if(el.readOnly || el.disabled) return false;
-                // 不排除 thead 中的可能用于筛选的输入框，交由上层逻辑判断
-                if(el.offsetWidth === 0 && el.offsetHeight === 0) return false;
-                return true;
-            }
-
-            function extractMachinePrefix(text) {
-                var m = text.match(/^(\\d+#)/);
-                return m ? m[1] : null;
-            }
-
-            function findInput(item){
-                var el = document.getElementById(item.id) || document.querySelector('[name="'+item.id+'"]');
-                if(el && isValidInput(el)) {
-                    AndroidBridge.log('通过ID/Name找到输入框: ' + item.label);
-                    return el;
-                }
-                if(!item.label) return null;
-
-                var cleanLabel = getLabelText(item);
-                var variants = getLabelVariants(item.label);
-                var machinePrefix = extractMachinePrefix(cleanLabel) || dominantMachinePrefix;
-                var coreLabel = machinePrefix && cleanLabel.indexOf(machinePrefix)===0 ? cleanLabel.substring(machinePrefix.length) : cleanLabel;
-
-                AndroidBridge.log('查找: ' + item.label + ' core=' + coreLabel + ' prefix=' + machinePrefix);
-
-                // placeholder 嗅探
-                var allInputs = document.querySelectorAll('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])');
-                for(var i=0; i<allInputs.length; i++){
-                    var inp = allInputs[i];
-                    if(!isValidInput(inp)) continue;
-                    var ph = (inp.placeholder || '').replace(/\\s+/g, '');
-                    if(ph) {
-                        for(var v=0; v<variants.length; v++){
-                            if(ph.indexOf(variants[v]) > -1 || variants[v].indexOf(ph) > -1) {
-                                AndroidBridge.log('placeholder匹配: ' + item.label);
-                                return inp;
-                            }
-                        }
-                    }
-                }
-
-                // 表格列映射
-                var allTables = document.querySelectorAll('table, .el-table');
-                for(var t=0; t<allTables.length; t++){
-                    var table = allTables[t];
-                    var ths = table.querySelectorAll('th');
-                    var colIndex = -1;
-                    for(var h=0; h<ths.length; h++){
-                        var thText = (ths[h].innerText || ths[h].textContent || '').replace(/\\s+/g, '');
-                        for(var v=0; v<variants.length; v++){
-                            if(thText.indexOf(variants[v]) > -1 || variants[v].indexOf(thText) > -1){
-                                colIndex = ths[h].cellIndex;
-                                break;
-                            }
-                        }
-                        if(colIndex > -1) break;
-                    }
-                    if(colIndex > -1){
-                        var rows = table.querySelectorAll('tbody tr, .el-table__row');
-                        for(var r=0; r<rows.length; r++){
-                            var row = rows[r];
-                            if(machinePrefix){
-                                var firstCell = row.cells ? row.cells[0] : null;
-                                var rowIdentifier = firstCell ? (firstCell.innerText || firstCell.textContent || '').replace(/\\s+/g, '') : (row.innerText || row.textContent || '').replace(/\\s+/g, '');
-                                if(rowIdentifier.indexOf(machinePrefix) === -1) continue;
-                            }
-                            var cells = row.cells;
-                            if(cells && cells[colIndex]){
-                                var input = cells[colIndex].querySelector('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])');
-                                if(input && isValidInput(input)) {
-                                    AndroidBridge.log('表格定位: ' + item.label);
-                                    return input;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // 全局邻近搜索（增加 el-form-item 支持）
-                var textElements = document.querySelectorAll('span, td, div, p, label, .el-form-item__label');
-                for(var i=0; i<textElements.length; i++){
-                    var node = textElements[i];
-                    var text = (node.innerText || node.textContent || '').replace(/\\s+/g, '');
-                    if(!text) continue;
-                    for(var v=0; v<variants.length; v++){
-                        if(text.indexOf(variants[v]) > -1 || variants[v].indexOf(text) > -1){
-                            var input = node.querySelector('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])');
-                            if(input && isValidInput(input)) { AndroidBridge.log('自身查找: ' + item.label); return input; }
-                            var sibling = node.nextElementSibling;
-                            while(sibling){
-                                input = sibling.querySelector('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])') || (sibling.tagName==='INPUT'?sibling:null);
-                                if(input && isValidInput(input)) { AndroidBridge.log('兄弟元素: ' + item.label); return input; }
-                                sibling = sibling.nextElementSibling;
-                            }
-                            var parent = node.parentElement;
-                            var depth = 0;
-                            while(parent && depth < 4 && parent.tagName !== 'BODY'){
-                                var pSibling = parent.nextElementSibling;
-                                while(pSibling){
-                                    input = pSibling.querySelector('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])') || (pSibling.tagName==='INPUT'?pSibling:null);
-                                    if(input && isValidInput(input)) { AndroidBridge.log('父级兄弟: ' + item.label); return input; }
-                                    pSibling = pSibling.nextElementSibling;
-                                }
-                                var parentInputs = parent.querySelectorAll('input:not([data-ocr-filled]), textarea:not([data-ocr-filled])');
-                                for(var k=0; k<parentInputs.length; k++){
-                                    if(isValidInput(parentInputs[k])) { AndroidBridge.log('父级容器: ' + item.label); return parentInputs[k]; }
-                                }
-                                parent = parent.parentElement;
-                                depth++;
-                            }
-                        }
-                    }
-                }
-                AndroidBridge.log('未找到输入框: ' + item.label + ' (ID: ' + item.id + ')');
-                return null;
-            }
-
-            function triggerNativeSetter(el, valStr) {
-                el.removeAttribute('readonly');
-                el.removeAttribute('disabled');
-                var proto = Object.getPrototypeOf(el);
-                var protoSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-                var ownSetter = Object.getOwnPropertyDescriptor(el, 'value')?.set;
-                if (protoSetter && ownSetter !== protoSetter) {
-                    protoSetter.call(el, valStr);
-                } else if (ownSetter) {
-                    ownSetter.call(el, valStr);
-                } else {
-                    el.value = valStr;
-                }
-                el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-            }
-
-            function getNativeValue(el) {
-                var proto = Object.getPrototypeOf(el);
-                var getter = Object.getOwnPropertyDescriptor(proto, 'value')?.get;
-                if (getter) { return getter.call(el); }
-                return el.value;
-            }
-
-            function forceSetValue(el, v) {
-                var valStr = v.toString();
-                el.dispatchEvent(new Event('focus', { bubbles: true }));
-                triggerNativeSetter(el, valStr);
-                el.dispatchEvent(new Event('blur', { bubbles: true }));
-                el.setAttribute('data-ocr-filled', valStr);
-            }
-
-            function isPageReady() {
-                return document.querySelectorAll('.el-loading-mask, .ant-spin-container, .loading-mask').length === 0;
-            }
-
-            window.__ocrLastFilledCount = -1;
-            
-            function scanAndAutofillEngine(){
-                if (!isPageReady()) return;
-                var currentFilled = 0;
-                for(var i=0; i<targetData.length; i++){
-                    var item = targetData[i];
-                    var el = findInput(item);
-                    if(el){
-                        var valStr = item.v.toString();
-                        var nativeVal = getNativeValue(el);
-                        var currentVal = nativeVal ? nativeVal.toString() : '';
-                        if (currentVal !== valStr && el.getAttribute('data-ocr-filled') !== valStr) {
-                            forceSetValue(el, item.v);
-                            AndroidBridge.log('填入值: ' + item.label + ' = ' + valStr);
-                        }
-                        if (nativeVal?.toString() === valStr || el.getAttribute('data-ocr-filled') === valStr) {
-                            currentFilled++;
-                        }
-                    }
-                }
-        """)
-
-        // 复选框
-        for (pid in pumpIds) {
-            val safePid = pid.esc()
-            sb.append("""
-                var chk = document.getElementById('$safePid') || document.querySelector('[value="$safePid"], [name="$safePid"]');
-                if(chk && chk.type === 'checkbox' && chk.offsetWidth > 0){
-                    if(!chk.closest('thead') && 
-                       !chk.closest('.el-table__header-wrapper') &&
-                       chk.id.indexOf('check-all') === -1) {
-                        if(chk.getAttribute('data-ocr-filled') !== 'true'){
-                            var cs = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked');
-                            if(cs && cs.set) { cs.set.call(chk, true); } else { chk.checked = true; }
-                            chk.dispatchEvent(new Event('change', { bubbles: true }));
-                            chk.setAttribute('data-ocr-filled', 'true');
-                        }
-                        currentFilled++;
-                    }
-                }
-            """)
-        }
-
-        sb.append("""
-                if(currentFilled !== window.__ocrLastFilledCount){
-                    window.__ocrLastFilledCount = currentFilled;
-                    if(window.AndroidBridge && window.AndroidBridge.onFillComplete){
-                        AndroidBridge.onFillComplete(currentFilled);
-                    }
-                }
-            }
-
-            setInterval(scanAndAutofillEngine, $AUTO_SCAN_INTERVAL_MS);
-            scanAndAutofillEngine();
-            setTimeout(function(){ if(document.activeElement) document.activeElement.blur(); }, 1000);
-        })();
-        """)
+        // 旧版脚本（已废弃，保留空壳）
+        sb.append("})();")
         return sb.toString()
     }
 
