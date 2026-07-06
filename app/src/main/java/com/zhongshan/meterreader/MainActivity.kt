@@ -35,13 +35,6 @@ class MainActivity : AppCompatActivity() {
     private var pendingPhotoFileName: String? = null
     private var isProcessing = false
 
-    // 冷冻泵名称映射
-    private val screwPumpNames = mapOf(
-        "screw_1" to listOf("7号冷冻泵", "8号冷冻泵"),
-        "screw_2" to listOf("5号冷冻泵", "6号冷冻泵"),
-        "screw_3" to listOf("3号冷冻泵", "4号冷冻泵")
-    )
-
     // 板交分组定义
     private val plateGroupDefs = mapOf(
         "hx1_all" to listOf(
@@ -285,19 +278,34 @@ class MainActivity : AppCompatActivity() {
             unitJson.put(k, v)
         }
 
+        // 合并压力预设（水压）
         val presets = PresetManager.getPresetsForMachine(machineId)
         for ((fieldIdWithLabel, value) in presets) {
-            val label = fieldIdWithLabel.split("|").getOrNull(1) ?: continue
+            val parts = fieldIdWithLabel.split("|")
+            if (parts.size != 2) continue
+            val label = parts[1]
             val dataKey = labelToScrewDataKey(label)
             if (dataKey != null) {
                 unitJson.put(dataKey, value)
             }
         }
 
-        val pumps = screwPumpNames[machineId] ?: emptyList()
-        val pumpsArray = JSONArray()
-        pumps.forEach { pumpsArray.put(it) }
-        unitJson.put("pumps", pumpsArray)
+        // 读取冷冻泵预设（逗号分隔的字符串）
+        val pumpsKey = when (machineId) {
+            "screw_1" -> "screw_1_pumps"
+            "screw_2" -> "screw_2_pumps"
+            "screw_3" -> "screw_3_pumps"
+            else -> null
+        }
+        if (pumpsKey != null) {
+            val pumpsStr = PresetManager.getPresetValue(pumpsKey, "")
+            val pumpsList = pumpsStr.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            val pumpsArray = JSONArray()
+            pumpsList.forEach { pumpsArray.put(it) }
+            unitJson.put("pumps", pumpsArray)
+        } else {
+            unitJson.put("pumps", JSONArray()) // 空数组
+        }
         unitJson.put("remark", "")
 
         when (unitNo) {
