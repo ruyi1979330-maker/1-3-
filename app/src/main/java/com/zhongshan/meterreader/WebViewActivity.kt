@@ -141,11 +141,11 @@
 	        sb.append("if(window.__ocrFillEngineStarted) return;\n")
 	        sb.append("window.__ocrFillEngineStarted = true;\n")
 	        sb.append("var targetData = [];\n")
-	        val pumpItems = mutableListOf<Pair<String, String>>()
+	        val pumpItems = mutableListOf<String>()
 	        for (i in keys.indices) {
 	            val key = keys[i]
 	            if (key.startsWith("__pump__")) {
-	                pumpItems.add(Pair(key.removePrefix("__pump__"), values[i]))
+	                pumpItems.add(key.removePrefix("__pump__"))
 	                continue
 	            }
 	            val parts = key.split("|")
@@ -201,7 +201,7 @@
 	                    for(var j=0; j<formItems.length; j++){
 	                        var labelDiv = formItems[j].querySelector('.controlLabelName');
 	                        if(!labelDiv) continue;
-	                        var labelText = (labelDiv.innerText || labelDiv.textContent || '').replace(/\\s+/g, '');
+	                        var labelText = (labelDiv.innerText || labelDiv.textContent || '').replace(/\s+/g, '');
 	                        if(labelText === cleanLabel) {
 	                            // 找到匹配的表单项了！
 	                            var controlBox = formItems[j].querySelector('.customFormControlBox');
@@ -232,36 +232,36 @@
 	                }
 	        """)
 	        // 3. 处理冷冻泵勾选框
-	        for (pumpItem in pumpItems) {
-	            val safeName = pumpItem.first.esc()
-	            sb.append("""
-	                // 勾选冷冻泵: $safeName
-	                var pumpLabels = document.querySelectorAll('label.ming.Checkbox');
-	                for(var k=0; k<pumpLabels.length; k++){
-	                    var pTitle = pumpLabels[k].getAttribute('title') || '';
-	                    if(pTitle === '$safeName') {
-	                        var checkboxBox = pumpLabels[k].querySelector('.Checkbox-box');
-	                        // 如果未勾选，且没有 ocr 填充标记，则点击
-	                        if(checkboxBox && checkboxBox.className.indexOf('Checkbox-checked') === -1 && pumpLabels[k].getAttribute('data-ocr-filled') !== 'true') {
-	                            pumpLabels[k].click();
-	                            pumpLabels[k].setAttribute('data-ocr-filled', 'true');
-	                            AndroidBridge.log('已勾选: $safeName');
+	        val pumpArrayStr = pumpItems.joinToString(prefix = "[", postfix = "]") { "'${it.esc()}'" }
+	        sb.append("var pumpItems = $pumpArrayStr;\n")
+	        sb.append("""
+	                // 3. 勾选冷冻泵
+	                for(var k=0; k<pumpItems.length; k++){
+	                    var pumpName = pumpItems[k];
+	                    var pumpLabels = document.querySelectorAll('label.ming.Checkbox');
+	                    for(var m=0; m<pumpLabels.length; m++){
+	                        var pTitle = pumpLabels[m].getAttribute('title') || '';
+	                        if(pTitle === pumpName) {
+	                            var checkboxBox = pumpLabels[m].querySelector('.Checkbox-box');
+	                            // 如果未勾选，且没有 ocr 填充标记，则点击
+	                            if(checkboxBox && checkboxBox.className.indexOf('Checkbox-checked') === -1 && pumpLabels[m].getAttribute('data-ocr-filled') !== 'true') {
+	                                pumpLabels[m].click();
+	                                pumpLabels[m].setAttribute('data-ocr-filled', 'true');
+	                                AndroidBridge.log('已勾选: ' + pumpName);
+	                            }
+	                            currentFilled++;
 	                        }
-	                        currentFilled++;
 	                    }
 	                }
-	            """)
-	        }
-	        sb.append("""
 	                // 如果没填全，每 3 秒打印一次当前页面的 div 详情供调试
-	                if (currentFilled < targetData.length) {
+	                if (currentFilled < targetData.length + pumpItems.length) {
 	                    if (!window.__lastPrintTime || Date.now() - window.__lastPrintTime > 3000) {
 	                        window.__lastPrintTime = Date.now();
 	                        var boxes = document.querySelectorAll('.customFormControlBox span.sc-jgwFWF, .customFormControlBox span.WordBreak');
 	                        var logMsg = '\n=== 当前可见数值框 (共 ' + boxes.length + ' 个) ===\n';
-	                        for (var m = 0; m < boxes.length && m < 15; m++) {
-	                            var el = boxes[m];
-	                            logMsg += 'Value[' + m + ']: "' + (el.innerText||'') + '"\n';
+	                        for (var n = 0; n < boxes.length && n < 15; n++) {
+	                            var el = boxes[n];
+	                            logMsg += 'Value[' + n + ']: "' + (el.innerText||'') + '"\n';
 	                        }
 	                        AndroidBridge.domLog(logMsg);
 	                    }
