@@ -1,4 +1,3 @@
-// 文件名: MainActivity.kt
 package com.zhongshan.meterreader
 
 import android.Manifest
@@ -278,19 +277,14 @@ class MainActivity : AppCompatActivity() {
             unitJson.put(k, v)
         }
 
-        // 合并压力预设（水压）
-        val presets = PresetManager.getPresetsForMachine(machineId)
-        for ((fieldIdWithLabel, value) in presets) {
-            val parts = fieldIdWithLabel.split("|")
-            if (parts.size != 2) continue
-            val label = parts[1]
-            val dataKey = labelToScrewDataKey(label)
-            if (dataKey != null) {
-                unitJson.put(dataKey, value)
-            }
-        }
+        // 合并压力预设：四个水压字段统一使用预设值
+        val pressureValue = PresetManager.getPressurePreset()
+        unitJson.put("evapInPressure", pressureValue)
+        unitJson.put("evapOutPressure", pressureValue)
+        unitJson.put("condInPressure", pressureValue)
+        unitJson.put("condOutPressure", pressureValue)
 
-        // 读取预设勾选的冷冻泵，直接注入到unit的pumps数组
+        // 读取预设勾选的冷冻泵，注入pumps数组
         val selectedPumpNums = PresetManager.getSelectedPumps()
         val pumpsArray = JSONArray()
         selectedPumpNums.forEach { num ->
