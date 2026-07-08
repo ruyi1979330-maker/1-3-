@@ -32,7 +32,7 @@ object PresetManager {
         sp.edit().putString(KEY_VOLTAGE_PRESET, value).apply()
     }
 
-    // 冷冻泵预设
+    // 冷冻泵勾选集合
     fun getSelectedPumps(): Set<String> {
         return sp.getStringSet(KEY_SELECTED_PUMPS, emptySet()) ?: emptySet()
     }
