@@ -279,14 +279,13 @@ class MainActivity : AppCompatActivity() {
             unitJson.put(k, v)
         }
 
-        // 水压预设逻辑：OCR没有识别到对应水压，才填充预设压力值（还原你原本需求）
-        val pressurePreset = PresetManager.getPressurePreset()
-        if (!unitJson.has("evapInPressure")) unitJson.put("evapInPressure", pressurePreset)
-        if (!unitJson.has("evapOutPressure")) unitJson.put("evapOutPressure", pressurePreset)
-        if (!unitJson.has("condInPressure")) unitJson.put("condInPressure", pressurePreset)
-        if (!unitJson.has("condOutPressure")) unitJson.put("condOutPressure", pressurePreset)
+        // 水压预设逻辑：OCR没有识别到对应水压，才填充对应预设值（四个独立控制）
+        if (!unitJson.has("evapInPressure")) unitJson.put("evapInPressure", PresetManager.getEvapInPressure())
+        if (!unitJson.has("evapOutPressure")) unitJson.put("evapOutPressure", PresetManager.getEvapOutPressure())
+        if (!unitJson.has("condInPressure")) unitJson.put("condInPressure", PresetManager.getCondInPressure())
+        if (!unitJson.has("condOutPressure")) unitJson.put("condOutPressure", PresetManager.getCondOutPressure())
 
-        // 冷冻泵：读取一级预设界面勾选的泵号，自动组装填入表单
+        // 冷冻泵：读取预设勾选的泵号，自动组装填入表单
         val selectedPumpNums = PresetManager.getSelectedPumps()
         val pumpsArray = JSONArray()
         selectedPumpNums.forEach { num ->
@@ -303,7 +302,7 @@ class MainActivity : AppCompatActivity() {
         return root
     }
 
-    // OCR label -> 数据 key 映射（完全沿用原有映射关系，未改动）
+    // OCR label -> 数据 key 映射
     private fun labelToScrewDataKey(label: String): String? {
         return when (label) {
             "蒸发器进口水温", "蒸发器进水温度" -> "evapInTemp"
