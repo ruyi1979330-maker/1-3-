@@ -1,4 +1,3 @@
-// 文件名: PresetManager.kt
 package com.zhongshan.meterreader
 
 import android.content.Context
