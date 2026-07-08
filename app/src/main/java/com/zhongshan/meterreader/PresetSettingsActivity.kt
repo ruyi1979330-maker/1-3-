@@ -1,3 +1,4 @@
+// 文件名: PresetSettingsActivity.kt
 package com.zhongshan.meterreader
 
 import android.os.Bundle
@@ -9,43 +10,66 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 
 class PresetSettingsActivity : AppCompatActivity() {
-    private lateinit var etPressure: EditText
-    private lateinit var etVoltage: EditText
+    private lateinit var etEvapInPressure: EditText
+    private lateinit var etEvapOutPressure: EditText
+    private lateinit var etCondInPressure: EditText
+    private lateinit var etCondOutPressure: EditText
     private val pumpCheckboxes = mutableListOf<CheckBox>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         title = "预设管理"
 
-        // 根布局
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 32, 48, 32)
         }
 
-        // 1. 压力预设
-        val tvPressure = TextView(this).apply {
-            text = "压力预设值"
+        // 1. 蒸发器进口水压
+        val tvEvapIn = TextView(this).apply {
+            text = "蒸发器进口水压"
             textSize = 16f
             setPadding(0, 0, 0, 8)
         }
-        etPressure = EditText(this).apply {
-            hint = "请输入默认压力值"
-            setText(PresetManager.getPressurePreset())
+        etEvapInPressure = EditText(this).apply {
+            hint = "请输入蒸发器进口水压预设值"
+            setText(PresetManager.getEvapInPressure())
         }
 
-        // 2. 电压预设
-        val tvVoltage = TextView(this).apply {
-            text = "电压预设值"
+        // 2. 蒸发器出口水压
+        val tvEvapOut = TextView(this).apply {
+            text = "蒸发器出口水压"
             textSize = 16f
             setPadding(0, 24, 0, 8)
         }
-        etVoltage = EditText(this).apply {
-            hint = "请输入默认电压值"
-            setText(PresetManager.getVoltagePreset())
+        etEvapOutPressure = EditText(this).apply {
+            hint = "请输入蒸发器出口水压预设值"
+            setText(PresetManager.getEvapOutPressure())
         }
 
-        // 3. 冷冻泵选择（一级界面直接显示，无需二级菜单）
+        // 3. 冷凝器进口水压
+        val tvCondIn = TextView(this).apply {
+            text = "冷凝器进口水压"
+            textSize = 16f
+            setPadding(0, 24, 0, 8)
+        }
+        etCondInPressure = EditText(this).apply {
+            hint = "请输入冷凝器进口水压预设值"
+            setText(PresetManager.getCondInPressure())
+        }
+
+        // 4. 冷凝器出口水压
+        val tvCondOut = TextView(this).apply {
+            text = "冷凝器出口水压"
+            textSize = 16f
+            setPadding(0, 24, 0, 8)
+        }
+        etCondOutPressure = EditText(this).apply {
+            hint = "请输入冷凝器出口水压预设值"
+            setText(PresetManager.getCondOutPressure())
+        }
+
+        // 5. 冷冻泵选择
         val tvPumps = TextView(this).apply {
             text = "冷冻泵选择"
             textSize = 16f
@@ -74,10 +98,14 @@ class PresetSettingsActivity : AppCompatActivity() {
         }
 
         // 组装界面
-        root.addView(tvPressure)
-        root.addView(etPressure)
-        root.addView(tvVoltage)
-        root.addView(etVoltage)
+        root.addView(tvEvapIn)
+        root.addView(etEvapInPressure)
+        root.addView(tvEvapOut)
+        root.addView(etEvapOutPressure)
+        root.addView(tvCondIn)
+        root.addView(etCondInPressure)
+        root.addView(tvCondOut)
+        root.addView(etCondOutPressure)
         root.addView(tvPumps)
         root.addView(pumpsContainer)
         root.addView(btnSave)
@@ -86,9 +114,11 @@ class PresetSettingsActivity : AppCompatActivity() {
     }
 
     private fun savePreset() {
-        // 保存压力、电压预设
-        PresetManager.setPressurePreset(etPressure.text.toString().trim())
-        PresetManager.setVoltagePreset(etVoltage.text.toString().trim())
+        // 保存四个水压预设
+        PresetManager.setEvapInPressure(etEvapInPressure.text.toString().trim())
+        PresetManager.setEvapOutPressure(etEvapOutPressure.text.toString().trim())
+        PresetManager.setCondInPressure(etCondInPressure.text.toString().trim())
+        PresetManager.setCondOutPressure(etCondOutPressure.text.toString().trim())
 
         // 保存冷冻泵勾选状态
         val selected = mutableSetOf<String>()
