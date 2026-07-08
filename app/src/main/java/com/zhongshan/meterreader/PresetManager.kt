@@ -1,65 +1,65 @@
 package com.zhongshan.meterreader
-
 import android.content.Context
 import android.content.SharedPreferences
-
 object PresetManager {
-    private lateinit var sp: SharedPreferences
-
-    // 四个独立水压预设
-    private const val KEY_EVAP_IN_PRESSURE = "evap_in_pressure"
-    private const val KEY_EVAP_OUT_PRESSURE = "evap_out_pressure"
-    private const val KEY_COND_IN_PRESSURE = "cond_in_pressure"
-    private const val KEY_COND_OUT_PRESSURE = "cond_out_pressure"
-    // 冷冻泵预设
-    private const val KEY_SELECTED_PUMPS = "selected_pumps"
-
+    private const val PREFS_NAME = "preset_values"
+    data class PresetItem(
+        val label: String,
+        val storageKey: String,
+        val formFieldId: String,
+        val defaultValue: String,
+        val machineGroup: String
+    )
+    // 核心修复：使用与 Web 表单匹配的中文描述
+    val allItems = listOf(
+        PresetItem("1号特灵-蒸发器进口水压", "screw_evap_in_p", "field_1_03|蒸发器进口水压", "0.45", "trane_screw"),
+        PresetItem("1号特灵-蒸发器出口水压", "screw_evap_out_p", "field_1_04|蒸发器出口水压", "0.45", "trane_screw"),
+        PresetItem("1号特灵-冷凝器进口水压", "screw_cond_in_p", "field_1_10|冷凝器进口水压", "0.45", "trane_screw"),
+        PresetItem("1号特灵-冷凝器出口水压", "screw_cond_out_p", "field_1_11|冷凝器出口水压", "0.45", "trane_screw")
+    )
+    private val machineToGroup = mapOf(
+        "screw_1" to "trane_screw", "screw_2" to "trane_screw", "screw_3" to "trane_screw"
+    )
+    private lateinit var prefs: SharedPreferences
     fun init(context: Context) {
-        sp = context.getSharedPreferences("meter_preset", Context.MODE_PRIVATE)
+        prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val editor = prefs.edit()
+        allItems.forEach {
+            if (!prefs.contains(it.storageKey))
+                editor.putString(it.storageKey, it.defaultValue)
+        }
+        editor.apply()
     }
-
-    // 蒸发器进口水压
-    fun getEvapInPressure(): String {
-        return sp.getString(KEY_EVAP_IN_PRESSURE, "0.45") ?: "0.45"
+    fun getPresetsForMachine(machineId: String): Map<String, String> {
+        val group = machineToGroup[machineId] ?: return emptyMap()
+        val offset = when (machineId) {
+            "screw_2"   -> 30
+            "screw_3"   -> 50
+            else -> 0
+        }
+        return allItems.filter { it.machineGroup == group }
+            .mapNotNull { item ->
+                var actualFieldId = item.formFieldId
+                if (offset > 0) {
+                    val parts = actualFieldId.split("|")
+                    val rawId = parts[0]
+                    val idParts = rawId.split("_")
+                    if (idParts.size == 3) {
+                        val num = idParts[2].toIntOrNull()
+                        if (num != null) {
+                            val newId = "${idParts[0]}_${idParts[1]}_${String.format("%02d", num + offset)}"
+                            actualFieldId = if (parts.size > 1) "$newId|${parts[1]}" else newId
+                        }
+                    }
+                }
+                val value = prefs.getString(item.storageKey, item.defaultValue) ?: item.defaultValue
+                actualFieldId to value
+            }.toMap()
     }
-
-    fun setEvapInPressure(value: String) {
-        sp.edit().putString(KEY_EVAP_IN_PRESSURE, value).apply()
+    fun updatePreset(storageKey: String, newValue: String) {
+        prefs.edit().putString(storageKey, newValue).apply()
     }
-
-    // 蒸发器出口水压
-    fun getEvapOutPressure(): String {
-        return sp.getString(KEY_EVAP_OUT_PRESSURE, "0.45") ?: "0.45"
-    }
-
-    fun setEvapOutPressure(value: String) {
-        sp.edit().putString(KEY_EVAP_OUT_PRESSURE, value).apply()
-    }
-
-    // 冷凝器进口水压
-    fun getCondInPressure(): String {
-        return sp.getString(KEY_COND_IN_PRESSURE, "0.45") ?: "0.45"
-    }
-
-    fun setCondInPressure(value: String) {
-        sp.edit().putString(KEY_COND_IN_PRESSURE, value).apply()
-    }
-
-    // 冷凝器出口水压
-    fun getCondOutPressure(): String {
-        return sp.getString(KEY_COND_OUT_PRESSURE, "0.45") ?: "0.45"
-    }
-
-    fun setCondOutPressure(value: String) {
-        sp.edit().putString(KEY_COND_OUT_PRESSURE, value).apply()
-    }
-
-    // 冷冻泵勾选集合
-    fun getSelectedPumps(): Set<String> {
-        return sp.getStringSet(KEY_SELECTED_PUMPS, emptySet()) ?: emptySet()
-    }
-
-    fun setSelectedPumps(pumps: Set<String>) {
-        sp.edit().putStringSet(KEY_SELECTED_PUMPS, pumps).apply()
+    fun getPresetValue(storageKey: String, defaultValue: String): String {
+        return prefs.getString(storageKey, defaultValue) ?: defaultValue
     }
 }
