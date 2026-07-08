@@ -1,3 +1,4 @@
+// 文件名: PresetManager.kt
 package com.zhongshan.meterreader
 
 import android.content.Context
@@ -6,30 +7,52 @@ import android.content.SharedPreferences
 object PresetManager {
     private lateinit var sp: SharedPreferences
 
-    private const val KEY_PRESSURE_PRESET = "pressure_preset"
-    private const val KEY_VOLTAGE_PRESET = "voltage_preset"
+    // 四个独立水压预设
+    private const val KEY_EVAP_IN_PRESSURE = "evap_in_pressure"
+    private const val KEY_EVAP_OUT_PRESSURE = "evap_out_pressure"
+    private const val KEY_COND_IN_PRESSURE = "cond_in_pressure"
+    private const val KEY_COND_OUT_PRESSURE = "cond_out_pressure"
+    // 冷冻泵预设
     private const val KEY_SELECTED_PUMPS = "selected_pumps"
 
     fun init(context: Context) {
         sp = context.getSharedPreferences("meter_preset", Context.MODE_PRIVATE)
     }
 
-    // 压力预设
-    fun getPressurePreset(): String {
-        return sp.getString(KEY_PRESSURE_PRESET, "0.45") ?: "0.45"
+    // 蒸发器进口水压
+    fun getEvapInPressure(): String {
+        return sp.getString(KEY_EVAP_IN_PRESSURE, "0.45") ?: "0.45"
     }
 
-    fun setPressurePreset(value: String) {
-        sp.edit().putString(KEY_PRESSURE_PRESET, value).apply()
+    fun setEvapInPressure(value: String) {
+        sp.edit().putString(KEY_EVAP_IN_PRESSURE, value).apply()
     }
 
-    // 电压预设
-    fun getVoltagePreset(): String {
-        return sp.getString(KEY_VOLTAGE_PRESET, "380") ?: "380"
+    // 蒸发器出口水压
+    fun getEvapOutPressure(): String {
+        return sp.getString(KEY_EVAP_OUT_PRESSURE, "0.45") ?: "0.45"
     }
 
-    fun setVoltagePreset(value: String) {
-        sp.edit().putString(KEY_VOLTAGE_PRESET, value).apply()
+    fun setEvapOutPressure(value: String) {
+        sp.edit().putString(KEY_EVAP_OUT_PRESSURE, value).apply()
+    }
+
+    // 冷凝器进口水压
+    fun getCondInPressure(): String {
+        return sp.getString(KEY_COND_IN_PRESSURE, "0.45") ?: "0.45"
+    }
+
+    fun setCondInPressure(value: String) {
+        sp.edit().putString(KEY_COND_IN_PRESSURE, value).apply()
+    }
+
+    // 冷凝器出口水压
+    fun getCondOutPressure(): String {
+        return sp.getString(KEY_COND_OUT_PRESSURE, "0.45") ?: "0.45"
+    }
+
+    fun setCondOutPressure(value: String) {
+        sp.edit().putString(KEY_COND_OUT_PRESSURE, value).apply()
     }
 
     // 冷冻泵勾选集合
