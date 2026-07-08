@@ -130,13 +130,16 @@ class WebViewActivity : AppCompatActivity() {
                     remark: "螺杆机组备注"
                 };
 
+                // 匹配所有非复选/单选的输入框，兼容无type属性的默认输入框
+                const inputs = document.querySelectorAll("input:not([type='checkbox']):not([type='radio']), textarea");
+                
                 for (const key in fieldMap) {
                     if (!unitData.hasOwnProperty(key)) continue;
                     const fieldName = unitPrefix + fieldMap[key];
-                    const inputs = document.querySelectorAll("input[type='text'], input[type='number'], textarea");
                     for (let i = 0; i < inputs.length; i++) {
                         const el = inputs[i];
-                        const parent = el.closest("tr, td, .form-item, .field-item, label, div");
+                        // 扩大父节点查找范围，兼容table、各类UI框架表单
+                        const parent = el.closest("tr, td, li, .form-item, .field-item, .ant-form-item, .el-form-item, label, div");
                         if (!parent) continue;
                         const labelText = parent.textContent.trim();
                         if (labelText.indexOf(fieldName) !== -1) {
@@ -198,7 +201,7 @@ class WebViewActivity : AppCompatActivity() {
 
                 return filledCount;
             } catch(e) {
-                console.error("填充脚本出错", e);
+                console.error("螺杆填充脚本出错", e);
                 return 0;
             }
         })();
@@ -212,6 +215,9 @@ class WebViewActivity : AppCompatActivity() {
                 const fillData = $fillDataJson;
                 const groups = fillData.plateGroups || [];
                 let filledCount = 0;
+
+                // 匹配所有非复选/单选的输入框，兼容无type属性的默认输入框
+                const inputs = document.querySelectorAll("input:not([type='checkbox']):not([type='radio']), textarea");
 
                 groups.forEach(group => {
                     const groupTitle = group.groupTitle || "";
@@ -230,10 +236,10 @@ class WebViewActivity : AppCompatActivity() {
                     for (const key in fieldNameMap) {
                         if (!fields.hasOwnProperty(key)) continue;
                         const fullFieldName = groupTitle + fieldNameMap[key];
-                        const inputs = document.querySelectorAll("input[type='text'], input[type='number'], textarea");
                         for (let i = 0; i < inputs.length; i++) {
                             const el = inputs[i];
-                            const parent = el.closest("tr, td, .form-item, .field-item, label, div");
+                            // 扩大父节点查找范围，兼容table、各类UI框架表单
+                            const parent = el.closest("tr, td, li, .form-item, .field-item, .ant-form-item, .el-form-item, label, div");
                             if (!parent) continue;
                             const labelText = parent.textContent.trim();
                             if (labelText.indexOf(fullFieldName) !== -1) {
