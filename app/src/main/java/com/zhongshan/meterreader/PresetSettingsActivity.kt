@@ -1,4 +1,3 @@
-// 文件名: PresetSettingsActivity.kt
 package com.zhongshan.meterreader
 
 import android.os.Bundle
