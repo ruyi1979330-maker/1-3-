@@ -437,11 +437,15 @@ class WebViewActivity : AppCompatActivity() {
                         }
                     }
 
-                    for (var k = 0; k < pumpItems.length; k++) {
-                        if (checkPump(pumpItems[k])) {
-                            filledCount++;
-                            AndroidBridge.log('已勾选冷冻泵: ' + pumpItems[k]);
+                    // 修复：冷冻泵勾选仅执行一次，避免轮询反复点击导致状态翻转
+                    if (!window.__pumpCheckDone) {
+                        for (var k = 0; k < pumpItems.length; k++) {
+                            if (checkPump(pumpItems[k])) {
+                                filledCount++;
+                                AndroidBridge.log('已勾选冷冻泵: ' + pumpItems[k]);
+                            }
                         }
+                        window.__pumpCheckDone = true;
                     }
 
                     if (filledCount > maxFilledCount) {
