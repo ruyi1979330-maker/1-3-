@@ -1,132 +1,121 @@
 package com.zhongshan.meterreader
-
 import android.os.Bundle
-import android.widget.CheckBox
+import android.text.InputFilter
+import android.text.InputType
+import android.view.LayoutInflater
+import android.view.ViewGroup
 import android.widget.EditText
-import android.widget.LinearLayout
-import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.zhongshan.meterreader.databinding.ActivityPresetSettingsBinding
+import com.zhongshan.meterreader.databinding.ItemPresetBinding
 class PresetSettingsActivity : AppCompatActivity() {
-    private lateinit var etEvapInPressure: EditText
-    private lateinit var etEvapOutPressure: EditText
-    private lateinit var etCondInPressure: EditText
-    private lateinit var etCondOutPressure: EditText
-    private val pumpCheckboxes = mutableListOf<CheckBox>()
-
+    private lateinit var binding: ActivityPresetSettingsBinding
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        title = "预设管理"
-
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(48, 32, 48, 32)
-        }
-
-        // 1. 蒸发器进口水压
-        val tvEvapIn = TextView(this).apply {
-            text = "蒸发器进口水压"
-            textSize = 16f
-            setPadding(0, 0, 0, 8)
-        }
-        etEvapInPressure = EditText(this).apply {
-            hint = "请输入蒸发器进口水压预设值"
-            setText(PresetManager.getEvapInPressure())
-        }
-
-        // 2. 蒸发器出口水压
-        val tvEvapOut = TextView(this).apply {
-            text = "蒸发器出口水压"
-            textSize = 16f
-            setPadding(0, 24, 0, 8)
-        }
-        etEvapOutPressure = EditText(this).apply {
-            hint = "请输入蒸发器出口水压预设值"
-            setText(PresetManager.getEvapOutPressure())
-        }
-
-        // 3. 冷凝器进口水压
-        val tvCondIn = TextView(this).apply {
-            text = "冷凝器进口水压"
-            textSize = 16f
-            setPadding(0, 24, 0, 8)
-        }
-        etCondInPressure = EditText(this).apply {
-            hint = "请输入冷凝器进口水压预设值"
-            setText(PresetManager.getCondInPressure())
-        }
-
-        // 4. 冷凝器出口水压
-        val tvCondOut = TextView(this).apply {
-            text = "冷凝器出口水压"
-            textSize = 16f
-            setPadding(0, 24, 0, 8)
-        }
-        etCondOutPressure = EditText(this).apply {
-            hint = "请输入冷凝器出口水压预设值"
-            setText(PresetManager.getCondOutPressure())
-        }
-
-        // 5. 冷冻泵选择
-        val tvPumps = TextView(this).apply {
-            text = "冷冻泵选择"
-            textSize = 16f
-            setPadding(0, 32, 0, 12)
-        }
-        val pumpsContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-        val selectedPumps = PresetManager.getSelectedPumps()
-        for (i in 1..8) {
-            val cb = CheckBox(this).apply {
-                text = "${i}号冷冻泵"
-                textSize = 15f
-                setPadding(0, 8, 0, 8)
-                isChecked = selectedPumps.contains("$i")
+        try {
+            binding = ActivityPresetSettingsBinding.inflate(layoutInflater)
+            setContentView(binding.root)
+            setSupportActionBar(binding.toolbar)
+            supportActionBar?.setDisplayHomeAsUpEnabled(true)
+            supportActionBar?.title = "压力与电压预设管理"
+            binding.toolbar.setNavigationOnClickListener { finish() }
+            binding.recyclerView.layoutManager = LinearLayoutManager(this)
+            binding.recyclerView.adapter = PresetAdapter(PresetManager.allItems) { item ->
+                showEditDialog(item)
             }
-            pumpCheckboxes.add(cb)
-            pumpsContainer.addView(cb)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            try {
+                if (!::binding.isInitialized) {
+                    binding = ActivityPresetSettingsBinding.inflate(layoutInflater)
+                    setContentView(binding.root)
+                }
+                binding.toolbar.setNavigationOnClickListener { finish() }
+                binding.recyclerView.layoutManager = LinearLayoutManager(this)
+                binding.recyclerView.adapter = PresetAdapter(PresetManager.allItems) { item ->
+                    showEditDialog(item)
+                }
+            } catch (e2: Exception) {
+                e2.printStackTrace()
+                finish()
+            }
         }
-
-        // 保存按钮
-        val btnSave = android.widget.Button(this).apply {
-            text = "保存预设"
-            setOnClickListener { savePreset() }
-            setPadding(0, 40, 0, 0)
-        }
-
-        // 组装界面
-        root.addView(tvEvapIn)
-        root.addView(etEvapInPressure)
-        root.addView(tvEvapOut)
-        root.addView(etEvapOutPressure)
-        root.addView(tvCondIn)
-        root.addView(etCondInPressure)
-        root.addView(tvCondOut)
-        root.addView(etCondOutPressure)
-        root.addView(tvPumps)
-        root.addView(pumpsContainer)
-        root.addView(btnSave)
-
-        setContentView(root)
     }
-
-    private fun savePreset() {
-        // 保存四个水压预设
-        PresetManager.setEvapInPressure(etEvapInPressure.text.toString().trim())
-        PresetManager.setEvapOutPressure(etEvapOutPressure.text.toString().trim())
-        PresetManager.setCondInPressure(etCondInPressure.text.toString().trim())
-        PresetManager.setCondOutPressure(etCondOutPressure.text.toString().trim())
-
-        // 保存冷冻泵勾选状态
-        val selected = mutableSetOf<String>()
-        pumpCheckboxes.forEachIndexed { index, cb ->
-            if (cb.isChecked) selected.add("${index + 1}")
-        }
-        PresetManager.setSelectedPumps(selected)
-
-        Toast.makeText(this, "预设已保存", Toast.LENGTH_SHORT).show()
+    override fun onSupportNavigateUp(): Boolean {
         finish()
+        return true
+    }
+    private fun showEditDialog(item: PresetManager.PresetItem) {
+        if (isFinishing || isDestroyed) return
+        // 判断是否为冷冻泵勾选项
+        if (item.storageKey.endsWith("_pumps")) {
+            val currentPumps = PresetManager.getPumps(item.storageKey, item.defaultValue)
+            val checkedItems = PresetManager.availablePumps.map { currentPumps.contains(it) }.toBooleanArray()
+            AlertDialog.Builder(this)
+                .setTitle("勾选: ${item.label}")
+                .setMultiChoiceItems(PresetManager.availablePumps.toTypedArray(), checkedItems) { _, which, isChecked ->
+                    checkedItems[which] = isChecked
+                }
+                .setPositiveButton("保存") { _, _ ->
+                    val selectedPumps = PresetManager.availablePumps.filterIndexed { index, _ -> checkedItems[index] }
+                    PresetManager.savePumps(item.storageKey, selectedPumps)
+                    binding.recyclerView.adapter?.notifyDataSetChanged()
+                    Toast.makeText(this, "已更新${item.label}", Toast.LENGTH_SHORT).show()
+                }
+                .setNegativeButton("取消", null)
+                .show()
+        } else {
+            // 普通数值输入
+            val editText = EditText(this).apply {
+                inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                val currentValue = PresetManager.getPresetValue(item.storageKey, item.defaultValue)
+                setText(currentValue)
+                setSelection(text.length)
+                filters = arrayOf(InputFilter { source, _, _, dest, _, _ ->
+                    if (source == "." && dest.contains(".")) "" else null
+                })
+            }
+            AlertDialog.Builder(this)
+                .setTitle("修改预设: ${item.label}")
+                .setView(editText)
+                .setPositiveButton("保存") { _, _ ->
+                    val newValue = editText.text.toString().trim()
+                    if (newValue.isNotEmpty()) {
+                        PresetManager.updatePreset(item.storageKey, newValue)
+                        binding.recyclerView.adapter?.notifyDataSetChanged()
+                        Toast.makeText(this, "已同步更新同组机型预设值", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                .setNegativeButton("取消", null)
+                .show()
+        }
+    }
+    inner class PresetAdapter(
+        private val items: List<PresetManager.PresetItem>,
+        private val onItemClick: (PresetManager.PresetItem) -> Unit
+    ) : RecyclerView.Adapter<PresetAdapter.ViewHolder>() {
+        inner class ViewHolder(val itemBinding: ItemPresetBinding) :
+            RecyclerView.ViewHolder(itemBinding.root)
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
+            val b = ItemPresetBinding.inflate(LayoutInflater.from(parent.context), parent, false)
+            return ViewHolder(b)
+        }
+        override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+            val item = items[position]
+            // 根据类型显示不同的值内容
+            val displayValue = if (item.storageKey.endsWith("_pumps")) {
+                PresetManager.getPumps(item.storageKey, item.defaultValue).joinToString(", ")
+            } else {
+                PresetManager.getPresetValue(item.storageKey, item.defaultValue)
+            }
+            holder.itemBinding.tvLabel.text = item.label
+            holder.itemBinding.tvValue.text = displayValue
+            holder.itemBinding.root.setOnClickListener { onItemClick(item) }
+        }
+        override fun getItemCount() = items.size
     }
 }
