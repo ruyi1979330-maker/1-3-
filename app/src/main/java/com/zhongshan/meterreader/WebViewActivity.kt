@@ -19,10 +19,9 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class WebViewActivity : AppCompatActivity() {
     companion object {
-        private const val WEB_LOAD_TIMEOUT_MS = 45_000L // 基础超时拉长到45秒，适配弱网
-        private const val PROGRESS_STALL_TIMEOUT_MS = 12_000L // 进度12秒不动才判超时
+        private const val WEB_LOAD_TIMEOUT_MS = 20_000L
         private const val AUTO_SCAN_INTERVAL_MS = 1500L
-        private const val MAX_IDLE_SCAN_COUNT = 3
+        private const val MAX_IDLE_SCAN_COUNT = 3 // 连续N次填充数无变化则停止轮询
     }
 
     internal lateinit var binding: ActivityWebviewBinding
@@ -31,9 +30,8 @@ class WebViewActivity : AppCompatActivity() {
     private val timeoutHandler = Handler(Looper.getMainLooper())
     private val pageLoadGeneration = AtomicInteger(0)
     private val isFillDone = AtomicBoolean(false)
-    private var lastProgressTime = 0L
-    private var lastProgress = 0
 
+    // 螺杆机组字段 -> 中文标签映射（与页面HTML标签严格对应）
     private val screwFieldLabelMap = mapOf(
         "evapInTemp" to "蒸发器进口水温",
         "evapOutTemp" to "蒸发器出口水温",
@@ -54,6 +52,7 @@ class WebViewActivity : AppCompatActivity() {
         "remark" to "螺杆机组备注"
     )
 
+    // 板交字段 -> 中文标签映射（与页面HTML标签严格对应）
     private val plateFieldLabelMap = mapOf(
         "inTemp" to "进水温度",
         "outTemp" to "出水温度",
@@ -64,6 +63,7 @@ class WebViewActivity : AppCompatActivity() {
         "remark" to "备注"
     )
 
+    // JS字符串安全转义：仅转义特殊字符，不删除空格
     private fun String.esc(): String =
         replace("\\", "\\\\")
             .replace("'", "\\'")
@@ -116,6 +116,7 @@ class WebViewActivity : AppCompatActivity() {
         DebugLogger.log("WebView", "收到填充类型: $fillType")
         DebugLogger.log("WebView", "收到填充数据: $fillDataJson")
 
+        // 解析数据生成扁平化标签-值列表 + 冷冻泵列表
         val (targetFields, pumpList) = parseFillData(fillType, fillDataJson)
         fillJsPayload = compileFillJs(targetFields, pumpList, tabName)
 
@@ -123,6 +124,9 @@ class WebViewActivity : AppCompatActivity() {
         if (targetUrl.isNotEmpty()) binding.webView.loadUrl(targetUrl)
     }
 
+    /**
+     * 解析结构化JSON，转换为扁平化的「标签-值」列表 + 冷冻泵列表
+     */
     private fun parseFillData(fillType: String, jsonStr: String): Pair<List<Pair<String, String>>, List<String>> {
         val fields = mutableListOf<Pair<String, String>>()
         val pumps = mutableListOf<String>()
@@ -133,6 +137,7 @@ class WebViewActivity : AppCompatActivity() {
             val root = JSONObject(jsonStr)
 
             if (fillType == "screw") {
+                // 解析螺杆机组数据：unit1 / unit2 / unit3
                 listOf("unit1" to "1#", "unit2" to "2#", "unit3" to "3#").forEach { (unitKey, prefix) ->
                     if (root.has(unitKey)) {
                         val unitObj = root.getJSONObject(unitKey)
@@ -145,6 +150,7 @@ class WebViewActivity : AppCompatActivity() {
                                 fields.add(Pair(fullLabel, unitObj.getString(key)))
                             }
                         }
+                        // 修复：冷冻泵数组在机组对象内部，从unitObj读取
                         if (unitObj.has("pumps")) {
                             val pumpArr = unitObj.getJSONArray("pumps")
                             for (i in 0 until pumpArr.length()) {
@@ -154,6 +160,7 @@ class WebViewActivity : AppCompatActivity() {
                     }
                 }
             } else if (fillType == "plate") {
+                // 解析板交数据：plateGroups
                 if (root.has("plateGroups")) {
                     val groups = root.getJSONArray("plateGroups")
                     for (i in 0 until groups.length()) {
@@ -186,47 +193,22 @@ class WebViewActivity : AppCompatActivity() {
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         }
         binding.webView.addJavascriptInterface(SafeWebBridge(this), "AndroidBridge")
-
-        // 监听加载进度，进度在走就不超时
-        binding.webView.webChromeClient = object : WebChromeClient() {
-            override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                super.onProgressChanged(view, newProgress)
-                if (newProgress > lastProgress) {
-                    lastProgress = newProgress
-                    lastProgressTime = System.currentTimeMillis()
-                }
-            }
-        }
-
         binding.webView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 isFillDone.set(false)
-                lastProgress = 0
-                lastProgressTime = System.currentTimeMillis()
                 binding.progressBar.visibility = View.VISIBLE
                 binding.tvStatusBanner.visibility = View.VISIBLE
                 binding.tvStatusBanner.text = "⏳ 正在连接数据中心，请稍候…"
                 val gen = pageLoadGeneration.incrementAndGet()
-
-                // 双层超时校验：总时长45秒兜底 + 进度12秒不动判死
-                val checkTimeout = object : Runnable {
-                    override fun run() {
-                        if (pageLoadGeneration.get() != gen) return
-                        val now = System.currentTimeMillis()
-                        val stallTime = now - lastProgressTime
-
-                        if (stallTime >= PROGRESS_STALL_TIMEOUT_MS || now - lastProgressTime >= WEB_LOAD_TIMEOUT_MS) {
-                            binding.progressBar.visibility = View.GONE
-                            binding.webView.stopLoading()
-                            binding.layoutNetworkError.visibility = View.VISIBLE
-                            binding.tvErrorMsg.text = "网络加载超时，请检查信号后重试。"
-                            binding.tvStatusBanner.visibility = View.GONE
-                        } else {
-                            timeoutHandler.postDelayed(this, 2000)
-                        }
+                timeoutHandler.postDelayed({
+                    if (pageLoadGeneration.get() == gen) {
+                        binding.progressBar.visibility = View.GONE
+                        binding.webView.stopLoading()
+                        binding.layoutNetworkError.visibility = View.VISIBLE
+                        binding.tvErrorMsg.text = "网络超时，请检查信号后重试。"
+                        binding.tvStatusBanner.visibility = View.GONE
                     }
-                }
-                timeoutHandler.postDelayed(checkTimeout, 2000)
+                }, WEB_LOAD_TIMEOUT_MS)
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
@@ -261,16 +243,20 @@ class WebViewActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * 编译填表JS：修复React赋值不显示、冷冻泵读取路径、首轮匹配失败问题
+     */
     private fun compileFillJs(
         fields: List<Pair<String, String>>,
         pumps: List<String>,
         targetTabName: String
     ): String {
+        // 构造字段数据JS数组
         val fieldsJs = fields.joinToString(",\n") { (label, value) ->
             "{label:'${label.esc()}', value:'${value.esc()}'}"
         }
+        // 构造冷冻泵JS数组
         val pumpsJs = pumps.joinToString(prefix = "[", postfix = "]") { "'${it.esc()}'" }
-        val totalExpected = fields.size + pumps.size
 
         return """
         (function(){
@@ -280,19 +266,20 @@ class WebViewActivity : AppCompatActivity() {
             var targetFields = [${fieldsJs}];
             var pumpItems = ${pumpsJs};
             var targetTab = '${targetTabName.esc()}';
-            var totalExpected = ${totalExpected};
-            var maxFilledCount = 0;
+            window.__ocrLastFilledCount = -1;
             var idleScanCount = 0;
             var scanTimer = null;
-            var domReady = false;
             
+            // 核心修复：缓存原生value setter，绕开React属性拦截，保证填入值真实显示
             var inputValueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
             var textareaValueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
 
+            // 文本标准化：去所有空白字符，用于精准匹配
             function cleanText(text) {
                 return (text || '').replace(/\s+/g, '').replace(/\u3000/g, '');
             }
 
+            // 切换到目标标签页
             function switchToTargetTab() {
                 if (!targetTab) return;
                 var tabs = document.querySelectorAll('.sectionTabItem');
@@ -309,6 +296,7 @@ class WebViewActivity : AppCompatActivity() {
                 }
             }
 
+            // 展开所有折叠分组（修复选择器：type属性在control子元素上）
             function expandAllGroups() {
                 var groupControls = document.querySelectorAll('.customFormItemControl[type="22"]');
                 for (var i = 0; i < groupControls.length; i++) {
@@ -319,58 +307,28 @@ class WebViewActivity : AppCompatActivity() {
                 }
             }
 
-            function triggerLazyRender() {
-                window.scrollTo(0, document.body.scrollHeight);
-                setTimeout(function(){ window.scrollTo(0, 0); }, 100);
-            }
-
-            function waitDomStable(callback) {
-                var prevCount = 0;
-                var stableRound = 0;
-                var elapsed = 0;
-                var checkGap = 100;
-                var maxWait = 2000;
-
-                function check() {
-                    var inputs = document.querySelectorAll('.customFormItem input, .customFormItem textarea');
-                    var curCount = inputs.length;
-                    if (curCount === prevCount && curCount > 0) {
-                        stableRound++;
-                        if (stableRound >= 2) {
-                            domReady = true;
-                            callback();
-                            return;
-                        }
-                    } else {
-                        stableRound = 0;
-                        prevCount = curCount;
-                    }
-                    elapsed += checkGap;
-                    if (elapsed >= maxWait) {
-                        domReady = true;
-                        callback();
-                        return;
-                    }
-                    setTimeout(check, checkGap);
-                }
-                check();
-            }
-
+            // 修复：React兼容赋值，填入后页面真实可见，不会被框架冲空
             function setInputValue(formItem, value) {
                 if (!formItem) return false;
+                
                 var controlBox = formItem.querySelector('.customFormControlBox');
                 if (!controlBox) return false;
+                
+                // 先激活输入框
                 controlBox.click();
 
+                // 1. 数值输入框：原生setter赋值 + 完整事件链
                 var input = formItem.querySelector('input');
                 if (input) {
                     inputValueSetter.call(input, value);
                     input.dispatchEvent(new Event('input', { bubbles: true }));
                     input.dispatchEvent(new Event('change', { bubbles: true }));
                     input.dispatchEvent(new Event('blur', { bubbles: true }));
+                    // 校验写入结果，杜绝假成功
                     return input.value === String(value);
                 }
 
+                // 2. 多行备注textarea：同样使用原生setter
                 var textarea = formItem.querySelector('textarea');
                 if (textarea) {
                     textareaValueSetter.call(textarea, value);
@@ -380,6 +338,7 @@ class WebViewActivity : AppCompatActivity() {
                     return textarea.value === String(value);
                 }
 
+                // 3. 兜底：修改显示文本
                 var displaySpan = controlBox.querySelector('.sc-jgwFWF, .WordBreak');
                 if (displaySpan) {
                     displaySpan.innerText = value;
@@ -390,6 +349,7 @@ class WebViewActivity : AppCompatActivity() {
                 return false;
             }
 
+            // 勾选冷冻泵复选框
             function checkPump(pumpName) {
                 var labels = document.querySelectorAll('label.ming.Checkbox');
                 var pumpClean = cleanText(pumpName);
@@ -407,22 +367,28 @@ class WebViewActivity : AppCompatActivity() {
                 return false;
             }
 
+            // 主扫描填表引擎
             function scanAndAutofillEngine() {
                 try {
-                    if (!domReady) return;
+                    switchToTargetTab();
+                    expandAllGroups();
                     
                     var filledCount = 0;
                     var formItems = document.querySelectorAll('.customFormItem');
                     if (formItems.length === 0) return;
 
+                    // 填充普通数值/文本字段
                     for (var i = 0; i < targetFields.length; i++) {
                         var item = targetFields[i];
                         var targetLabel = cleanText(item.label);
                         var found = false;
+
                         for (var j = 0; j < formItems.length; j++) {
                             var labelEl = formItems[j].querySelector('.controlLabelName');
                             if (!labelEl) continue;
                             var labelText = cleanText(labelEl.innerText || labelEl.getAttribute('title'));
+                            
+                            // 精准匹配优先，包含匹配兜底
                             if (labelText === targetLabel || labelText.indexOf(targetLabel) > -1) {
                                 if (setInputValue(formItems[j], item.value)) {
                                     filledCount++;
@@ -437,47 +403,41 @@ class WebViewActivity : AppCompatActivity() {
                         }
                     }
 
-                    // 修复：冷冻泵勾选仅执行一次，避免轮询反复点击导致状态翻转
-                    if (!window.__pumpCheckDone) {
-                        for (var k = 0; k < pumpItems.length; k++) {
-                            if (checkPump(pumpItems[k])) {
-                                filledCount++;
-                                AndroidBridge.log('已勾选冷冻泵: ' + pumpItems[k]);
-                            }
+                    // 勾选冷冻泵
+                    for (var k = 0; k < pumpItems.length; k++) {
+                        if (checkPump(pumpItems[k])) {
+                            filledCount++;
+                            AndroidBridge.log('已勾选冷冻泵: ' + pumpItems[k]);
                         }
-                        window.__pumpCheckDone = true;
                     }
 
-                    if (filledCount > maxFilledCount) {
-                        maxFilledCount = filledCount;
+                    // 填充数无变化则计数，达到阈值停止轮询
+                    if (filledCount === window.__ocrLastFilledCount) {
+                        idleScanCount++;
+                        if (idleScanCount >= ${MAX_IDLE_SCAN_COUNT}) {
+                            clearInterval(scanTimer);
+                            AndroidBridge.log('填充稳定，引擎自动停止轮询，最终填充数: ' + filledCount);
+                        }
+                    } else {
                         idleScanCount = 0;
+                        window.__ocrLastFilledCount = filledCount;
                         if (window.AndroidBridge && AndroidBridge.onFillComplete) {
                             AndroidBridge.onFillComplete(filledCount);
                         }
-                    } else {
-                        idleScanCount++;
-                    }
-
-                    if (idleScanCount >= ${MAX_IDLE_SCAN_COUNT} || maxFilledCount >= totalExpected) {
-                        clearInterval(scanTimer);
-                        AndroidBridge.log('填充稳定，引擎自动停止轮询，最终填充数: ' + maxFilledCount);
                     }
                 } catch (e) {
                     AndroidBridge.log('填表引擎异常: ' + e.message);
                 }
             }
 
-            switchToTargetTab();
-            expandAllGroups();
-            triggerLazyRender();
-            waitDomStable(function(){
-                scanAndAutofillEngine();
-                scanTimer = setInterval(scanAndAutofillEngine, ${AUTO_SCAN_INTERVAL_MS});
-            });
-
+            // 启动轮询
+            scanTimer = setInterval(scanAndAutofillEngine, ${AUTO_SCAN_INTERVAL_MS});
+            scanAndAutofillEngine();
+            
+            // 1秒后收起键盘
             setTimeout(function(){ 
                 if (document.activeElement) document.activeElement.blur(); 
-            }, 1500);
+            }, 1000);
         })();
         """.trimIndent()
     }
