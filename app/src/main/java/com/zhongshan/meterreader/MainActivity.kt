@@ -274,24 +274,38 @@ class MainActivity : AppCompatActivity() {
         }
 
         val unitJson = JSONObject()
-        // 先放入OCR识别到的所有字段
         for ((k, v) in unitData) {
             unitJson.put(k, v)
         }
 
-        // 水压预设逻辑：OCR没有识别到对应水压，才填充对应预设值（四个独立控制）
-        if (!unitJson.has("evapInPressure")) unitJson.put("evapInPressure", PresetManager.getEvapInPressure())
-        if (!unitJson.has("evapOutPressure")) unitJson.put("evapOutPressure", PresetManager.getEvapOutPressure())
-        if (!unitJson.has("condInPressure")) unitJson.put("condInPressure", PresetManager.getCondInPressure())
-        if (!unitJson.has("condOutPressure")) unitJson.put("condOutPressure", PresetManager.getCondOutPressure())
-
-        // 冷冻泵：读取预设勾选的泵号，自动组装填入表单
-        val selectedPumpNums = PresetManager.getSelectedPumps()
-        val pumpsArray = JSONArray()
-        selectedPumpNums.forEach { num ->
-            pumpsArray.put("${num}号冷冻泵")
+        // 合并压力预设（水压）
+        val presets = PresetManager.getPresetsForMachine(machineId)
+        for ((fieldIdWithLabel, value) in presets) {
+            val parts = fieldIdWithLabel.split("|")
+            if (parts.size != 2) continue
+            val label = parts[1]
+            val dataKey = labelToScrewDataKey(label)
+            if (dataKey != null) {
+                unitJson.put(dataKey, value)
+            }
         }
-        unitJson.put("pumps", pumpsArray)
+
+        // 读取冷冻泵预设（逗号分隔的字符串）
+        val pumpsKey = when (machineId) {
+            "screw_1" -> "screw_1_pumps"
+            "screw_2" -> "screw_2_pumps"
+            "screw_3" -> "screw_3_pumps"
+            else -> null
+        }
+        if (pumpsKey != null) {
+            val pumpsStr = PresetManager.getPresetValue(pumpsKey, "")
+            val pumpsList = pumpsStr.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            val pumpsArray = JSONArray()
+            pumpsList.forEach { pumpsArray.put(it) }
+            unitJson.put("pumps", pumpsArray)
+        } else {
+            unitJson.put("pumps", JSONArray()) // 空数组
+        }
         unitJson.put("remark", "")
 
         when (unitNo) {
