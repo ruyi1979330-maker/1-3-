@@ -308,14 +308,7 @@
 	                }
 	                return false;
 	            }
-	            // 模拟完整的鼠标点击事件，适配 React 框架事件委托机制
-	            function triggerMouseEvent(node, eventType) {
-	                var clickEvent = document.createEvent('MouseEvents');
-	                clickEvent.initEvent(eventType, true, true);
-	                node.dispatchEvent(clickEvent);
-	            }
-	            // 勾选冷冻泵复选框 (引入永久操作锁，彻底杜绝异步渲染导致的反向取消)
-	            // 返回值：0=未找到，1=本次新勾选，2=已操作过
+	            // 勾选冷冻泵复选框 (延迟出手 + 完整鼠标事件链 + 永久只点一次)
 	            function checkPump(pumpName) {
 	                // 1. 永久锁：只要操作过一次，永远返回2，绝不重复点击
 	                if (pumpsOperated[pumpName]) return 2;
@@ -327,10 +320,14 @@
 	                    var title = labels[i].getAttribute('title') || '';
 	                    if (cleanText(title) === pumpClean) {
 	                        pumpsOperated[pumpName] = true; // 打上永久标记，后续绝不触碰
-	                        // 2. 模拟完整点击事件链，确保 React 响应
-	                        triggerMouseEvent(labels[i], 'mousedown');
-	                        triggerMouseEvent(labels[i], 'mouseup');
-	                        triggerMouseEvent(labels[i], 'click');
+	                        AndroidBridge.log('👆 执行冷冻泵点击: ' + pumpName);
+	                        // 2. 模拟完整鼠标移入按下事件，激活 React 懒加载事件绑定
+	                        try {
+	                            labels[i].dispatchEvent(new Event('mouseover', { bubbles: true }));
+	                            labels[i].dispatchEvent(new Event('mousedown', { bubbles: true }));
+	                            labels[i].dispatchEvent(new Event('mouseup', { bubbles: true }));
+	                        } catch(e) {}
+	                        labels[i].click(); // 最终原生点击
 	                        return 1;
 	                    }
 	                }
@@ -369,11 +366,11 @@
 	                        }
 	                    }
 	                    // 勾选冷冻泵
-	                    // 修复：第2次轮询开始才尝试勾选，确保表单 DOM 已初步稳定，避免点击打空
-	                    if (window.__ocrScanCount >= 2) {
+	                    // 修复：第3次轮询（约3秒后）开始才尝试勾选，确保表单 React 事件已完全绑定，避免点击打空
+	                    if (window.__ocrScanCount >= 3) {
 	                        for (var k = 0; k < pumpItems.length; k++) {
 	                            var pumpStatus = checkPump(pumpItems[k]);
-	                            if (pumpStatus === 1) {
+	                            if (pumpStatus > 0) {
 	                                filledCount++;
 	                            }
 	                        }
