@@ -242,7 +242,7 @@
 	            window.__ocrMaxFilledCount = -1;
 	            window.__ocrIdleCount = 0;
 	            if (window.__ocrScanTimer) clearInterval(window.__ocrScanTimer);
-	            var pumpsOperated = {}; // 冷冻泵一次性操作锁
+	            var pumpsLastClickTime = {}; // 冷冻泵防抖记录
 	            // 核心修复：缓存原生value setter，绕开React属性拦截，保证填入值真实显示
 	            var inputValueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
 	            var textareaValueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
@@ -307,26 +307,35 @@
 	                }
 	                return false;
 	            }
-	            // 模拟完整的鼠标点击事件，适配 React 框架事件委托机制
-	            function triggerMouseEvent(node, eventType) {
-	                var clickEvent = document.createEvent('MouseEvents');
-	                clickEvent.initEvent(eventType, true, true);
-	                node.dispatchEvent(clickEvent);
-	            }
-	            // 勾选冷冻泵复选框 (引入一次性操作锁，彻底杜绝异步渲染导致的反向取消)
-	            // 返回值：0=未找到/失败，1=本次新勾选，2=已勾选无需操作
+	            // 勾选冷冻泵复选框 (精准回读 + 2秒防抖重试，彻底解决不勾选与反复横跳)
+	            // 返回值：0=未找到/防抖中，1=本次新勾选，2=已勾选无需操作
 	            function checkPump(pumpName) {
-	                if (pumpsOperated[pumpName]) return 2;
 	                var labels = document.querySelectorAll('label.ming.Checkbox');
 	                var pumpClean = cleanText(pumpName);
 	                for (var i = 0; i < labels.length; i++) {
 	                    var title = labels[i].getAttribute('title') || '';
 	                    if (cleanText(title) === pumpClean) {
-	                        pumpsOperated[pumpName] = true; // 标记为已操作，后续绝不重复点击
-	                        triggerMouseEvent(labels[i], 'mousedown');
-	                        triggerMouseEvent(labels[i], 'mouseup');
-	                        triggerMouseEvent(labels[i], 'click');
-	                        return 1;
+	                        // 1. 精准判断是否已勾选
+	                        var isChecked = false;
+	                        var input = labels[i].querySelector('input[type="checkbox"]');
+	                        if (input) {
+	                            isChecked = input.checked;
+	                        } else {
+	                            if (labels[i].className.indexOf('Checkbox-checked') > -1) isChecked = true;
+	                            var box = labels[i].querySelector('.Checkbox-box');
+	                            if (box && box.className.indexOf('Checkbox-checked') > -1) isChecked = true;
+	                        }
+	                        if (isChecked) return 2; // 已勾选，绝不触碰
+	                        // 2. 未勾选，检查距离上次点击的时间
+	                        var now = Date.now();
+	                        var lastTime = pumpsLastClickTime[pumpName] || 0;
+	                        // 2秒内不重复点击，给 React 渲染时间；超过2秒若仍未勾选则重试
+	                        if (now - lastTime > 2000) {
+	                            pumpsLastClickTime[pumpName] = now;
+	                            labels[i].click(); // 使用原生 click 最稳定
+	                            return 1;
+	                        }
+	                        return 0; 
 	                    }
 	                }
 	                return 0;
