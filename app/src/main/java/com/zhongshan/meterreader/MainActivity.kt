@@ -31,7 +31,6 @@ import java.util.*
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
-    // 生命周期资源池
     private val binarizePool = BinarizeResourcePool()
 
     private var selectedTemplate: DeviceTemplate? = null
@@ -40,7 +39,6 @@ class MainActivity : AppCompatActivity() {
     private var pendingPhotoFileName: String? = null
     private var isProcessing = false
 
-    // 板交分组定义
     private val plateGroupDefs = mapOf(
         "hx1_all" to listOf(
             "1号楼板交" to "bj1_0",
@@ -79,15 +77,10 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.GetContent()
     ) { uri ->
         if (uri != null && !isProcessing) {
-            val template = selectedTemplate
-            if (template != null && template.isHeatExchanger) {
-                lifecycleScope.launch {
-                    setProcessing(true)
-                    processImageSuspend(uri, ImageSource.GALLERY)
-                    setProcessing(false)
-                }
-            } else {
-                startUcrop(uri)
+            lifecycleScope.launch {
+                setProcessing(true)
+                processImageSuspend(uri, ImageSource.GALLERY)
+                setProcessing(false)
             }
         }
     }
@@ -112,7 +105,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 注入生命周期观察者
         lifecycle.addObserver(binarizePool)
 
         binding = ActivityMainBinding.inflate(layoutInflater)
@@ -390,26 +382,9 @@ class MainActivity : AppCompatActivity() {
         cameraLauncher.launch(pendingCameraUri!!)
     }
 
-    private fun startUcrop(sourceUri: Uri) {
-        val fileName = "crop_${System.currentTimeMillis()}.jpg"
-        val destFile = File(cacheDir, fileName)
-        val destUri = FileProvider.getUriForFile(this, "$packageName.fileprovider", destFile)
-        val options = UCrop.Options()
-        options.setCompressionFormat(android.graphics.Bitmap.CompressFormat.JPEG)
-        options.setCompressionQuality(90)
-        options.setHideBottomControls(false)
-        val uCropIntent = UCrop.of(sourceUri, destUri)
-            .withAspectRatio(4f, 3f)
-            .withMaxResultSize(3000, 4000)
-            .withOptions(options)
-            .getIntent(this)
-        uCropLauncher.launch(uCropIntent)
-    }
-
     private suspend fun processImageSuspend(uri: Uri, source: ImageSource) {
         val template = selectedTemplate ?: return
         DebugLogger.log("OCR", "开始识别: machineId=${template.machineId}, screenIndex=$currentScreenIndex, source=$source")
-        // 传入资源池
         val result = OCRFacade.performSmartOcr(this, uri, template, currentScreenIndex, source, binarizePool)
         DebugLogger.log("OCR", "识别结果: $result")
         if (result.isNotEmpty()) {
