@@ -1,9 +1,5 @@
 package com.zhongshan.meterreader.util
 
-/**
- * 互审最终版：滑动窗口多帧一致性状态机
- * 特性：字段独立计数 + 3/5窗口命中规则 + 业务前置校验
- */
 class TraneOcrStateManager(
     private val templateConfig: MeterTemplateConfig,
     private val windowSize: Int = 5,
@@ -12,14 +8,9 @@ class TraneOcrStateManager(
     private val fieldHistory = mutableMapOf<String, MutableList<String>>()
     private val requiredFields = templateConfig.roiList.map { it.fieldKey }.toSet()
 
-    /**
-     * 推入一帧识别结果
-     * @return true=所有字段已达成稳定共识，可触发成功
-     */
     fun pushFrame(frameResult: Map<String, String>): Boolean {
         for (field in requiredFields) {
             val value = frameResult[field] ?: continue
-            // 业务校验前置，无效值不进入投票
             if (!isValueValid(field, value)) continue
             
             val history = fieldHistory.getOrPut(field) { mutableListOf() }
@@ -34,7 +25,6 @@ class TraneOcrStateManager(
         }
     }
 
-    /** 获取最终稳定结果 */
     fun getFinalResult(): Map<String, String> {
         return requiredFields.associateWith { field ->
             val history = fieldHistory[field] ?: return@associateWith ""
@@ -42,7 +32,6 @@ class TraneOcrStateManager(
         }.filterValues { it.isNotEmpty() }
     }
 
-    /** 重置状态，重新识别 */
     fun reset() {
         fieldHistory.clear()
     }
