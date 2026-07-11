@@ -34,7 +34,6 @@ class MainActivity : AppCompatActivity() {
     private var pendingPhotoFileName: String? = null
     private var isProcessing = false
 
-    // 板交分组定义（原有逻辑完全保留）
     private val plateGroupDefs = mapOf(
         "hx1_all" to listOf(
             "1号楼板交" to "bj1_0",
@@ -50,15 +49,13 @@ class MainActivity : AppCompatActivity() {
         )
     )
 
-    // 相机权限
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) launchRealTimeScan() // 默认进入实时扫码模式
+        if (granted) launchRealTimeScan()
         else Toast.makeText(this, "需授予相机权限", Toast.LENGTH_SHORT).show()
     }
 
-    // 原有拍照模式（兜底备用）
     private val cameraLauncher = registerForActivityResult(
         ActivityResultContracts.TakePicture()
     ) { success ->
@@ -71,7 +68,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 相册选图
     private val galleryPickLauncher = registerForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
@@ -89,7 +85,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 裁剪回调
     private val uCropLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -108,12 +103,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 实时扫码结果回调
     private val realTimeScanLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == RESULT_OK) {
-            val resultStr = result.data?.getStringExtra(CameraOcrActivity.EXTRA_OCR_RESULT) ?: return@registerForActivityResult
+            val resultStr = result.data?.getStringExtra(CameraOcrActivity.EXTRA_OCR_RESULT)
+                ?: return@registerForActivityResult
             val resultMap = parseResultJson(resultStr)
             if (resultMap.isNotEmpty()) {
                 handleOcrResult(resultMap)
@@ -128,7 +123,6 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // 状态恢复
         if (savedInstanceState != null) {
             currentScreenIndex = savedInstanceState.getInt("KEY_SCREEN_INDEX", 0)
             val restoredFileName = savedInstanceState.getString("KEY_CAMERA_FILENAME")
@@ -146,7 +140,6 @@ class MainActivity : AppCompatActivity() {
             selectedTemplate = TemplateManager.allTemplates.first()
         }
 
-        // 清理缓存
         lifecycleScope.launch(Dispatchers.IO) {
             StorageAndImageUtils.clearOldCacheFiles(cacheDir)
         }
@@ -163,7 +156,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupUI() {
-        // 模板选择器（原有逻辑保留）
         val names = TemplateManager.allTemplates.map { it.displayName }
         binding.spinnerDevice.adapter =
             ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, names)
@@ -193,9 +185,9 @@ class MainActivity : AppCompatActivity() {
                 override fun onNothingSelected(p: AdapterView<*>?) {}
             }
 
-        // 主入口：实时扫码识别（推荐）
+        // 单击：实时扫码（推荐）；长按：传统拍照（兜底）
         binding.btnLaunchCamera.apply {
-            text = "📷 实时扫码识别（推荐）"
+            text = "📷 实时扫码识别（长按用传统拍照）"
             setOnClickListener {
                 Toast.makeText(this@MainActivity, "将屏幕对准取景框，自动识别", Toast.LENGTH_LONG).show()
                 if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.CAMERA)
@@ -206,13 +198,7 @@ class MainActivity : AppCompatActivity() {
                     cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                 }
             }
-        }
-
-        // 原有拍照模式（兜底入口）
-        binding.btnLegacyPhoto.apply {
-            visibility = View.VISIBLE
-            text = "📷 传统拍照识别"
-            setOnClickListener {
+            setOnLongClickListener {
                 Toast.makeText(this@MainActivity, "请将机组数据铺满屏幕后拍摄", Toast.LENGTH_LONG).show()
                 if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.CAMERA)
                     == PackageManager.PERMISSION_GRANTED
@@ -221,17 +207,16 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                 }
+                true
             }
         }
 
-        // 相册选图（原有逻辑保留）
         binding.btnGallery.setOnClickListener {
             if (!isProcessing) {
                 galleryPickLauncher.launch("image/*")
             }
         }
 
-        // 预设设置、数据传输（原有逻辑完全保留）
         binding.btnRoiCalibration.visibility = View.GONE
         binding.btnRoiCalibration.isEnabled = false
         binding.btnPresetSettings.setOnClickListener {
@@ -254,7 +239,6 @@ class MainActivity : AppCompatActivity() {
                     return@launch
                 }
 
-                // 螺杆机组处理
                 if (template.machineId in listOf("screw_1", "screw_2", "screw_3")) {
                     val fillData = buildScrewFillData(template.machineId, cachedData)
                     DebugLogger.log("MainActivity", "螺杆填充JSON: $fillData")
@@ -268,7 +252,6 @@ class MainActivity : AppCompatActivity() {
                     return@launch
                 }
 
-                // 板交处理
                 if (template.isHeatExchanger) {
                     val fillData = buildPlateFillData(template.machineId, cachedData)
                     DebugLogger.log("MainActivity", "板交填充JSON: $fillData")
@@ -285,7 +268,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 启动实时扫码
     private fun launchRealTimeScan() {
         val template = selectedTemplate ?: return
         val intent = Intent(this, CameraOcrActivity::class.java).apply {
@@ -295,7 +277,6 @@ class MainActivity : AppCompatActivity() {
         realTimeScanLauncher.launch(intent)
     }
 
-    // 原有拍照启动
     private fun launchCamera() {
         val fileName = "IMG_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}.jpg"
         pendingPhotoFileName = fileName
@@ -304,7 +285,6 @@ class MainActivity : AppCompatActivity() {
         cameraLauncher.launch(pendingCameraUri!!)
     }
 
-    // 原有裁剪逻辑
     private fun startUcrop(sourceUri: Uri) {
         val fileName = "crop_${System.currentTimeMillis()}.jpg"
         val destFile = File(cacheDir, fileName)
@@ -321,7 +301,6 @@ class MainActivity : AppCompatActivity() {
         uCropLauncher.launch(uCropIntent)
     }
 
-    // 原有单图识别
     private suspend fun processImageSuspend(uri: Uri, source: ImageSource) {
         val template = selectedTemplate ?: return
         DebugLogger.log("OCR", "开始识别: machineId=${template.machineId}, screenIndex=$currentScreenIndex, source=$source")
@@ -330,35 +309,35 @@ class MainActivity : AppCompatActivity() {
         handleOcrResult(result)
     }
 
-    // 统一处理识别结果（拍照/扫码共用）
     private fun handleOcrResult(result: Map<String, String>) {
         val template = selectedTemplate ?: return
-        if (result.isNotEmpty()) {
-            RecognitionResultHolder.saveFieldsForMachine(template.machineId, result)
-        }
-        val aggregatedData = RecognitionResultHolder.getFieldsForMachine(template.machineId)
-        DebugLogger.log("OCR", "聚合数据: $aggregatedData")
-        binding.tvDataPreview.text = aggregatedData.entries
-            .sortedBy { it.key }
-            .joinToString("\n") { (k, v) ->
-                val labelName = if (k.contains("|")) k.split("|")[1] else k
-                "【$labelName】：$v"
+        lifecycleScope.launch {
+            if (result.isNotEmpty()) {
+                RecognitionResultHolder.saveFieldsForMachine(template.machineId, result)
             }
-        val totalScreens = DeviceOcrStrategy.totalScreens(template.machineId)
-        if (result.isNotEmpty()) {
-            if (!template.isHeatExchanger && currentScreenIndex < totalScreens - 1) {
-                currentScreenIndex++
-                Toast.makeText(this, "第${currentScreenIndex}屏采集成功，请拍摄下一屏", Toast.LENGTH_SHORT).show()
+            val aggregatedData = RecognitionResultHolder.getFieldsForMachine(template.machineId)
+            DebugLogger.log("OCR", "聚合数据: $aggregatedData")
+            binding.tvDataPreview.text = aggregatedData.entries
+                .sortedBy { it.key }
+                .joinToString("\n") { (k, v) ->
+                    val labelName = if (k.contains("|")) k.split("|")[1] else k
+                    "【$labelName】：$v"
+                }
+            val totalScreens = DeviceOcrStrategy.totalScreens(template.machineId)
+            if (result.isNotEmpty()) {
+                if (!template.isHeatExchanger && currentScreenIndex < totalScreens - 1) {
+                    currentScreenIndex++
+                    Toast.makeText(this@MainActivity, "第${currentScreenIndex}屏采集成功，请拍摄下一屏", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this@MainActivity, "设备全部数据已采集完成！", Toast.LENGTH_LONG).show()
+                }
+                updateScreenProgress()
             } else {
-                Toast.makeText(this, "设备全部数据已采集完成！", Toast.LENGTH_LONG).show()
+                Toast.makeText(this@MainActivity, "未识别到有效数据", Toast.LENGTH_SHORT).show()
             }
-            updateScreenProgress()
-        } else {
-            Toast.makeText(this, "未识别到有效数据", Toast.LENGTH_SHORT).show()
         }
     }
 
-    // 解析扫码返回的JSON结果
     private fun parseResultJson(resultStr: String): Map<String, String> {
         return runCatching {
             val json = JSONObject(resultStr)
@@ -368,12 +347,11 @@ class MainActivity : AppCompatActivity() {
         }.getOrDefault(emptyMap())
     }
 
-    // 原有屏幕进度更新
     private fun updateScreenProgress() {
         val template = selectedTemplate ?: return
         val total = DeviceOcrStrategy.totalScreens(template.machineId)
         if (template.isHeatExchanger || total <= 1) {
-            binding.btnLaunchCamera.text = "📷 实时扫码识别（推荐）"
+            binding.btnLaunchCamera.text = "📷 实时扫码识别（长按用传统拍照）"
             return
         }
         val current = currentScreenIndex + 1
@@ -384,14 +362,13 @@ class MainActivity : AppCompatActivity() {
     private fun setProcessing(processing: Boolean) {
         isProcessing = processing
         binding.btnLaunchCamera.isEnabled = !processing
-        binding.btnLegacyPhoto.isEnabled = !processing
         binding.btnGallery.isEnabled = !processing
         binding.btnTransferAndFill.isEnabled = !processing
         binding.btnPresetSettings.isEnabled = !processing
         binding.progressBar.visibility = if (processing) View.VISIBLE else View.GONE
     }
 
-    // ==================== 以下原有业务逻辑完全保留 ====================
+    // ==================== 业务方法完整补全 ====================
     private fun buildScrewFillData(machineId: String, cachedData: Map<String, String>): JSONObject {
         val root = JSONObject()
         root.put("operator", "")
@@ -456,3 +433,54 @@ class MainActivity : AppCompatActivity() {
             val pumpsList = pumpsStr.split(",").map { it.trim() }.filter { it.isNotEmpty() }
             val pumpsArray = JSONArray()
             pumpsList.forEach { pumpsArray.put(it) }
+            unitJson.put("pumps", pumpsArray)
+        } else {
+            unitJson.put("pumps", JSONArray())
+        }
+        unitJson.put("remark", "")
+
+        when (unitNo) {
+            1 -> root.put("unit1", unitJson)
+            2 -> root.put("unit2", unitJson)
+            3 -> root.put("unit3", unitJson)
+        }
+        return root
+    }
+
+    private fun labelToScrewDataKey(label: String): String? {
+        return when (label) {
+            "蒸发器进口水温", "蒸发器进水温度" -> "evapInTemp"
+            "蒸发器出口水温", "蒸发器出水温度" -> "evapOutTemp"
+            "蒸发器进口水压" -> "evapInPressure"
+            "蒸发器出口水压" -> "evapOutPressure"
+            "蒸发器冷媒压力", "蒸发器制冷剂压力" -> "evapRefPressure"
+            "蒸发器蒸发温度", "蒸发器制冷剂饱和温度" -> "evapTemp"
+            "冷凝器进口水温", "冷凝器回水温度" -> "condInTemp"
+            "冷凝器出口水温", "冷凝器出水温度" -> "condOutTemp"
+            "冷凝器进口水压" -> "condInPressure"
+            "冷凝器出口水压" -> "condOutPressure"
+            "冷凝器冷媒压力", "冷凝器制冷剂压力" -> "condRefPressure"
+            "冷凝器冷凝温度", "冷凝器制冷剂饱和温度" -> "condTemp"
+            "压缩机油压", "油压" -> "compOilPressure"
+            "压缩机排出口温度", "压缩机排出端冷剂温度" -> "compDischargeTemp"
+            "电机电流", "电流L1 L2 L3" -> "motorCurrent"
+            "主机负载", "%RLA" -> "hostLoad"
+            else -> null
+        }
+    }
+
+    private fun buildPlateFillData(machineId: String, cachedData: Map<String, String>): JSONObject {
+        val root = JSONObject()
+        val groupsArray = JSONArray()
+        val groupDefs = plateGroupDefs[machineId] ?: return root
+
+        for ((groupTitle, prefix) in groupDefs) {
+            val fields = JSONObject()
+            for ((key, value) in cachedData) {
+                if (!key.startsWith("$prefix|")) continue
+                val label = key.substringAfter("|")
+                val fieldKey = when {
+                    label.contains("进水温度") -> "inTemp"
+                    label.contains("出水温度") -> "outTemp"
+                    label.contains("进水压力") -> "inPressure"
+                    label.contains("出水压力") -> "
