@@ -12,7 +12,7 @@ class BinarizeResourcePool : DefaultLifecycleObserver {
     private val yuvBuffer = AtomicReference<ByteArray>(null)
     private val canvasBuffer = AtomicReference<ByteArray>(null)
     
-    // 双缓冲机制，防止异步处理时的帧撕裂
+    // 双缓冲，使用 ARGB_8888 以兼容 ML Kit
     private val reusedBitmaps = AtomicReferenceArray<Bitmap>(2)
     private val bitmapIndex = AtomicInteger(0)
 
@@ -40,8 +40,11 @@ class BinarizeResourcePool : DefaultLifecycleObserver {
         
         if (bmp == null || bmp.width != width || bmp.height != height) {
             bmp?.recycle()
-            bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ALPHA_8)
+            bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             reusedBitmaps.set(currentIndex, bmp)
+        } else {
+            // 清空上一帧残留，填入白色背景
+            bmp.eraseColor(android.graphics.Color.WHITE)
         }
         return bmp
     }
