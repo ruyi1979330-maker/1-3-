@@ -17,6 +17,7 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import com.zhongshan.meterreader.data.DeviceTemplate
 import com.zhongshan.meterreader.databinding.ActivityMainBinding
+import com.zhongshan.meterreader.util.BinarizeResourcePool
 import com.zhongshan.meterreader.util.StorageAndImageUtils
 import com.yalantis.ucrop.UCrop
 import kotlinx.coroutines.Dispatchers
@@ -28,7 +29,11 @@ import java.text.SimpleDateFormat
 import java.util.*
 
 class MainActivity : AppCompatActivity() {
+
     private lateinit var binding: ActivityMainBinding
+    // 生命周期资源池
+    private val binarizePool = BinarizeResourcePool()
+
     private var selectedTemplate: DeviceTemplate? = null
     private var currentScreenIndex = 0
     private var pendingCameraUri: Uri? = null
@@ -57,6 +62,7 @@ class MainActivity : AppCompatActivity() {
         if (granted) launchCamera()
         else Toast.makeText(this, "需授予相机权限", Toast.LENGTH_SHORT).show()
     }
+
     private val cameraLauncher = registerForActivityResult(
         ActivityResultContracts.TakePicture()
     ) { success ->
@@ -68,6 +74,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
     private val galleryPickLauncher = registerForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
@@ -84,6 +91,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
     private val uCropLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -104,8 +112,12 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 注入生命周期观察者
+        lifecycle.addObserver(binarizePool)
+
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
         if (savedInstanceState != null) {
             currentScreenIndex = savedInstanceState.getInt("KEY_SCREEN_INDEX", 0)
             val restoredFileName = savedInstanceState.getString("KEY_CAMERA_FILENAME")
@@ -202,7 +214,6 @@ class MainActivity : AppCompatActivity() {
                     return@launch
                 }
 
-                // 螺杆机组处理
                 if (template.machineId in listOf("screw_1", "screw_2", "screw_3")) {
                     val fillData = buildScrewFillData(template.machineId, cachedData)
                     DebugLogger.log("MainActivity", "螺杆填充JSON: $fillData")
@@ -216,7 +227,6 @@ class MainActivity : AppCompatActivity() {
                     return@launch
                 }
 
-                // 板交处理
                 if (template.isHeatExchanger) {
                     val fillData = buildPlateFillData(template.machineId, cachedData)
                     DebugLogger.log("MainActivity", "板交填充JSON: $fillData")
@@ -233,7 +243,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 构建螺杆填充JSON
     private fun buildScrewFillData(machineId: String, cachedData: Map<String, String>): JSONObject {
         val root = JSONObject()
         root.put("operator", "")
@@ -269,28 +278,20 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        if (unitData.isEmpty()) {
-            return root
-        }
+        if (unitData.isEmpty()) return root
 
         val unitJson = JSONObject()
-        for ((k, v) in unitData) {
-            unitJson.put(k, v)
-        }
+        for ((k, v) in unitData) unitJson.put(k, v)
 
-        // 合并压力预设（水压）
         val presets = PresetManager.getPresetsForMachine(machineId)
         for ((fieldIdWithLabel, value) in presets) {
             val parts = fieldIdWithLabel.split("|")
             if (parts.size != 2) continue
             val label = parts[1]
             val dataKey = labelToScrewDataKey(label)
-            if (dataKey != null) {
-                unitJson.put(dataKey, value)
-            }
+            if (dataKey != null) unitJson.put(dataKey, value)
         }
 
-        // 读取冷冻泵预设（逗号分隔的字符串）
         val pumpsKey = when (machineId) {
             "screw_1" -> "screw_1_pumps"
             "screw_2" -> "screw_2_pumps"
@@ -304,7 +305,7 @@ class MainActivity : AppCompatActivity() {
             pumpsList.forEach { pumpsArray.put(it) }
             unitJson.put("pumps", pumpsArray)
         } else {
-            unitJson.put("pumps", JSONArray()) // 空数组
+            unitJson.put("pumps", JSONArray())
         }
         unitJson.put("remark", "")
 
@@ -316,7 +317,6 @@ class MainActivity : AppCompatActivity() {
         return root
     }
 
-    // OCR label -> 数据 key 映射
     private fun labelToScrewDataKey(label: String): String? {
         return when (label) {
             "蒸发器进口水温", "蒸发器进水温度" -> "evapInTemp"
@@ -339,7 +339,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 构建板交填充JSON
     private fun buildPlateFillData(machineId: String, cachedData: Map<String, String>): JSONObject {
         val root = JSONObject()
         val groupsArray = JSONArray()
@@ -360,11 +359,8 @@ class MainActivity : AppCompatActivity() {
                     label.contains("备注") -> "remark"
                     else -> continue
                 }
-                if (fieldKey == "remark") {
-                    fields.put("remark", value)
-                } else {
-                    fields.put(fieldKey, value)
-                }
+                if (fieldKey == "remark") fields.put("remark", value)
+                else fields.put(fieldKey, value)
             }
             if (fields.length() > 0) {
                 val groupObj = JSONObject()
@@ -413,7 +409,8 @@ class MainActivity : AppCompatActivity() {
     private suspend fun processImageSuspend(uri: Uri, source: ImageSource) {
         val template = selectedTemplate ?: return
         DebugLogger.log("OCR", "开始识别: machineId=${template.machineId}, screenIndex=$currentScreenIndex, source=$source")
-        val result = OCRFacade.performSmartOcr(this, uri, template, currentScreenIndex, source)
+        // 传入资源池
+        val result = OCRFacade.performSmartOcr(this, uri, template, currentScreenIndex, source, binarizePool)
         DebugLogger.log("OCR", "识别结果: $result")
         if (result.isNotEmpty()) {
             RecognitionResultHolder.saveFieldsForMachine(template.machineId, result)
@@ -450,5 +447,10 @@ class MainActivity : AppCompatActivity() {
         val current = currentScreenIndex + 1
         val screen = DeviceOcrStrategy.screenName(template.machineId, currentScreenIndex)
         binding.btnLaunchCamera.text = "📷 拍第 $current/$total 屏 · $screen"
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        lifecycle.removeObserver(binarizePool)
     }
 }
