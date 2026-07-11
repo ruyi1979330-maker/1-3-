@@ -152,17 +152,52 @@ object UltimateLcdBinarizer {
                 val roiPixels = IntArray(boxWidth * boxHeight)
                 bitmap.getPixels(roiPixels, 0, boxWidth, startX, startY, boxWidth, boxHeight)
 
+                // 第一轮：用初始阈值快速计算黑色占比
                 var totalGray = 0L
                 for (pixel in roiPixels) {
                     val r = (pixel shr 16) and 0xFF; val g = (pixel shr 8) and 0xFF; val b = pixel and 0xFF
                     totalGray += (0.299 * r + 0.587 * g + 0.114 * b).toInt()
                 }
                 val avgGray = (totalGray / roiPixels.size).toInt()
-                val threshold = avgGray - contrastOffset
-
-                DebugLogger.log("Binarizer", "ROI[$roiIndex] box=${boxWidth}x${boxHeight}, 平均灰度=$avgGray, 阈值=$threshold")
-
+                var threshold = avgGray - contrastOffset
                 var blackCount = 0
+                for (pixel in roiPixels) {
+                    val r = (pixel shr 16) and 0xFF; val g = (pixel shr 8) and 0xFF; val b = pixel and 0xFF
+                    val gray = (0.299 * r + 0.587 * g + 0.114 * b).toInt()
+                    if (gray < threshold) blackCount++
+                }
+                var blackPercent = (blackCount * 100f) / roiPixels.size
+
+                DebugLogger.log("Binarizer", "ROI[$roiIndex] 初始: 平均灰度=$avgGray, 阈值=$threshold, 黑色占比=${"%.1f".format(blackPercent)}%")
+
+                // 自适应调整：目标黑色占比 8%-30%
+                var attempts = 0
+                while (attempts < 10) {
+                    if (blackPercent < 5f) {
+                        // 太白了，降低阈值（减小偏移量）
+                        threshold = avgGray - (contrastOffset - (attempts + 1) * 5)
+                    } else if (blackPercent > 35f) {
+                        // 太黑了，提高阈值（增大偏移量）
+                        threshold = avgGray - (contrastOffset + (attempts + 1) * 5)
+                    } else {
+                        break
+                    }
+                    threshold = threshold.coerceIn(0, 255)
+                    if (threshold <= 0 || threshold >= 255) break
+
+                    blackCount = 0
+                    for (pixel in roiPixels) {
+                        val r = (pixel shr 16) and 0xFF; val g = (pixel shr 8) and 0xFF; val b = pixel and 0xFF
+                        val gray = (0.299 * r + 0.587 * g + 0.114 * b).toInt()
+                        if (gray < threshold) blackCount++
+                    }
+                    blackPercent = (blackCount * 100f) / roiPixels.size
+                    attempts++
+                }
+
+                DebugLogger.log("Binarizer", "ROI[$roiIndex] 自适应调整$attempts 次 → 最终阈值=$threshold, 黑色占比=${"%.1f".format(blackPercent)}%")
+
+                // 用最终阈值写入画布
                 for (y in 0 until boxHeight) {
                     for (x in 0 until boxWidth) {
                         val pixel = roiPixels[y * boxWidth + x]
@@ -172,16 +207,12 @@ object UltimateLcdBinarizer {
                         if (canvasIndex in 0 until canvasSize - 3) {
                             if (gray < threshold) {
                                 canvasArray[canvasIndex] = 0; canvasArray[canvasIndex+1] = 0; canvasArray[canvasIndex+2] = 0; canvasArray[canvasIndex+3] = 255.toByte()
-                                blackCount++
                             } else {
                                 canvasArray[canvasIndex] = 255.toByte(); canvasArray[canvasIndex+1] = 255.toByte(); canvasArray[canvasIndex+2] = 255.toByte(); canvasArray[canvasIndex+3] = 255.toByte()
                             }
                         }
                     }
                 }
-                val blackPercent = (blackCount * 100f) / (boxWidth * boxHeight)
-                DebugLogger.log("Binarizer", "ROI[$roiIndex] 黑色像素占比: ${"%.1f".format(blackPercent)}%")
-
                 currentYOffset += boxHeight + 4
             }
 
@@ -189,7 +220,6 @@ object UltimateLcdBinarizer {
             val byteBuffer = ByteBuffer.wrap(canvasArray, 0, canvasSize)
             outBitmap.copyPixelsFromBuffer(byteBuffer)
 
-            // 保存调试图片
             try {
                 val debugDir = File("/sdcard/Download/ocr_debug")
                 if (!debugDir.exists()) debugDir.mkdirs()
@@ -202,7 +232,7 @@ object UltimateLcdBinarizer {
 
             return@withContext BinarizedImageResult(InputImage.fromBitmap(outBitmap, 0), roiYRanges)
         } finally {
-            // 资源由资源池管理，无需额外释放
+            // 资源由资源池管理
         }
     }
 }
