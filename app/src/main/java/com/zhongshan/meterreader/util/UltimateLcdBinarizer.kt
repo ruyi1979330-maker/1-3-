@@ -25,7 +25,7 @@ object UltimateLcdBinarizer {
             val width = imageProxy.width
             val height = imageProxy.height
             val rowStride = yPlane.rowStride
-            val pixelStride = yPlane.pixelStride // 规范化获取步长
+            val pixelStride = yPlane.pixelStride
 
             val ySize = yBuffer.remaining()
             val yArray = resourcePool.acquireYuvBuffer(ySize)
@@ -44,7 +44,6 @@ object UltimateLcdBinarizer {
 
             val canvasSize = maxWidth * totalHeight
             val canvasArray = resourcePool.acquireCanvasBuffer(canvasSize)
-            // 采用更高效的 JNI memset 填充
             Arrays.fill(canvasArray, 0, canvasSize, 255.toByte())
 
             var currentYOffset = 0
@@ -54,6 +53,7 @@ object UltimateLcdBinarizer {
                 val endX = roi.right.coerceIn(0, width)
                 val endY = roi.bottom.coerceIn(0, height)
                 
+                // ✅ 已修复：严禁将 X 与 Y 混淆，在此处修正为正确的几何坐标差
                 val boxWidth = endX - startX
                 val boxHeight = endY - startY
                 if (boxWidth <= 0 || boxHeight <= 0) continue
@@ -65,12 +65,10 @@ object UltimateLcdBinarizer {
                         
                         var sum = 0
                         var count = 0
-                        // 采样计算：需考虑 pixelStride 的跨度
                         for (dy in -1..1) {
                             for (dx in -1..1) {
                                 val ny = (imgY + dy).coerceIn(0, height - 1)
                                 val nx = (imgX + dx).coerceIn(0, width - 1)
-                                // 修正点：使用 rowStride 和 pixelStride 计算索引
                                 val pixelIndex = ny * rowStride + nx * pixelStride
                                 if (pixelIndex in 0 until ySize) {
                                     sum += yArray[pixelIndex].toInt() and 0xFF
