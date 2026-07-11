@@ -7,13 +7,15 @@ import androidx.camera.core.ImageProxy
 import com.google.mlkit.vision.common.InputImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.util.Arrays
 
 object UltimateLcdBinarizer {
 
     /**
-     * 处理 CameraX 视频帧 (YUV_420_888)
+     * 处理 CameraX 视频帧 (YUV_420_888) —— 保留备用
      */
     suspend fun process(
         imageProxy: ImageProxy,
@@ -95,9 +97,15 @@ object UltimateLcdBinarizer {
                 currentYOffset += boxHeight + 4
             }
 
+            // 将 byte 数组转为 int 像素数组，适配 ARGB_8888
+            val pixels = IntArray(canvasSize)
+            for (i in 0 until canvasSize) {
+                val gray = canvasArray[i].toInt() and 0xFF
+                pixels[i] = if (gray == 0) 0xFF000000.toInt() else 0xFFFFFFFF.toInt()
+            }
+
             val bitmap = resourcePool.acquireBitmap(maxWidth, totalHeight)
-            val byteBuffer = ByteBuffer.wrap(canvasArray, 0, canvasSize)
-            bitmap.copyPixelsFromBuffer(byteBuffer)
+            bitmap.setPixels(pixels, 0, maxWidth, 0, 0, maxWidth, totalHeight)
 
             return@withContext InputImage.fromBitmap(bitmap, imageProxy.imageInfo.rotationDegrees)
         } finally {
@@ -106,7 +114,7 @@ object UltimateLcdBinarizer {
     }
 
     /**
-     * 处理单张 Bitmap（适配当前拍照/相册流程）
+     * 处理单张 Bitmap（拍照/相册） —— 当前主要使用
      */
     suspend fun processBitmap(
         bitmap: Bitmap,
@@ -185,9 +193,28 @@ object UltimateLcdBinarizer {
                 currentYOffset += boxHeight + 4
             }
 
+            // 转换为 ARGB_8888 兼容格式
+            val argbPixels = IntArray(canvasSize)
+            for (i in 0 until canvasSize) {
+                val gray = canvasArray[i].toInt() and 0xFF
+                argbPixels[i] = if (gray == 0) 0xFF000000.toInt() else 0xFFFFFFFF.toInt()
+            }
+
             val outBitmap = resourcePool.acquireBitmap(maxWidth, totalHeight)
-            val byteBuffer = ByteBuffer.wrap(canvasArray, 0, canvasSize)
-            outBitmap.copyPixelsFromBuffer(byteBuffer)
+            outBitmap.setPixels(argbPixels, 0, maxWidth, 0, 0, maxWidth, totalHeight)
+
+            // ---------- 调试：保存拼版图到文件 ----------
+            try {
+                val debugDir = File("/sdcard/Download/ocr_debug")
+                if (!debugDir.exists()) debugDir.mkdirs()
+                val debugFile = File(debugDir, "spritesheet_${System.currentTimeMillis()}.png")
+                FileOutputStream(debugFile).use { fos ->
+                    outBitmap.compress(Bitmap.CompressFormat.PNG, 100, fos)
+                }
+                android.util.Log.d("OCR_Debug", "拼版图已保存至: ${debugFile.absolutePath}")
+            } catch (e: Exception) {
+                android.util.Log.e("OCR_Debug", "保存拼版图失败", e)
+            }
 
             return@withContext InputImage.fromBitmap(outBitmap, 0)
         } finally {
