@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.view.View
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
@@ -45,15 +46,12 @@ class CameraOcrActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_camera_ocr)
 
-        // 接收参数
         val templateId = intent.getStringExtra(EXTRA_TEMPLATE_ID) ?: run { finish(); return }
         val screenIndex = intent.getIntExtra(EXTRA_SCREEN_INDEX, 0)
         val deviceTemplate = TemplateManager.findById(templateId) ?: run { finish(); return }
 
-        // 转换为OCR模板
         templateConfig = OcrTemplateConverter.convert(deviceTemplate, screenIndex)
 
-        // 初始化资源池，绑定生命周期自动释放
         resourcePool = BinarizeResourcePool()
         lifecycle.addObserver(resourcePool)
 
@@ -90,20 +88,16 @@ class CameraOcrActivity : AppCompatActivity() {
         cameraProviderFuture.addListener({
             val cameraProvider = cameraProviderFuture.get()
 
-            // 预览用例
             val preview = Preview.Builder()
                 .setTargetResolution(android.util.Size(1280, 720))
                 .build()
                 .also { it.setSurfaceProvider(previewView.surfaceProvider) }
 
-            // 计算取景框对应图像坐标
             val viewFinder = findViewById<View>(R.id.view_finder)
             val screenRect = getViewFinderImageRect(viewFinder, previewView)
 
-            // 初始化状态机
             val stateManager = TraneOcrStateManager(templateConfig)
 
-            // 分析用例：背压控制，只保留最新帧
             val imageAnalysis = ImageAnalysis.Builder()
                 .setTargetResolution(android.util.Size(1280, 720))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -120,15 +114,12 @@ class CameraOcrActivity : AppCompatActivity() {
 
                 lifecycleScope.launch(Dispatchers.Default) {
                     try {
-                        // 1. 稀疏ROI预处理+Sprite拼接
                         val processResult = UltimateLcdBinarizer.processYuvToSprite(
                             imageProxy, screenRect, templateConfig.roiList, resourcePool
                         ) ?: return@launch
 
-                        // 2. ML Kit识别
                         val frameResult = OCREngine.recognizeBySprite(processResult, templateConfig)
 
-                        // 3. 多帧一致性校验
                         if (stateManager.pushFrame(frameResult)) {
                             hasReturnedResult = true
                             triggerVibration()
@@ -155,22 +146,20 @@ class CameraOcrActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    /** UI取景框 → 图像坐标映射 */
     private fun getViewFinderImageRect(viewFinder: View, previewView: PreviewView): Rect {
         val previewWidth = previewView.width
         val previewHeight = previewView.height
-        val scaleX = 1280f / previewWidth
-        val scaleY = 720f / previewHeight
+        val scaleX = 1280f / previewWidth.toFloat()
+        val scaleY = 720f / previewHeight.toFloat()
 
         return Rect(
-            (viewFinder.left * scaleX).toInt(),
-            (viewFinder.top * scaleY).toInt(),
-            (viewFinder.right * scaleX).toInt(),
-            (viewFinder.bottom * scaleY).toInt()
+            (viewFinder.left.toFloat() * scaleX).toInt(),
+            (viewFinder.top.toFloat() * scaleY).toInt(),
+            (viewFinder.right.toFloat() * scaleX).toInt(),
+            (viewFinder.bottom.toFloat() * scaleY).toInt()
         )
     }
 
-    /** 识别成功震动反馈 */
     private fun triggerVibration() {
         val vibrator = getSystemService(VIBRATOR_SERVICE) as Vibrator
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -181,7 +170,6 @@ class CameraOcrActivity : AppCompatActivity() {
         }
     }
 
-    /** 返回结果并关闭页面 */
     private fun returnResult(result: Map<String, String>) {
         runOnUiThread {
             val resultJson = JSONObject()
