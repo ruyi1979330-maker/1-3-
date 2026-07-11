@@ -1,24 +1,26 @@
 package com.zhongshan.meterreader.util
 
+import com.zhongshan.meterreader.DeviceOcrStrategy
 import com.zhongshan.meterreader.data.DeviceTemplate
 
 object OcrTemplateConverter {
 
     fun convert(template: DeviceTemplate, screenIndex: Int): MeterTemplateConfig {
-        val roiConfigs = template.relativeConfigs
-            .filter { it.screenIndex == screenIndex }
-            .map { fieldConfig ->
-                OcrRoiConfig(
-                    fieldKey = fieldConfig.fieldKey,
-                    fieldLabel = fieldConfig.label,
-                    relativeRect = OcrRoiConfig.RectF(
-                        left = fieldConfig.relativeLeft,
-                        top = fieldConfig.relativeTop,
-                        right = fieldConfig.relativeRight,
-                        bottom = fieldConfig.relativeBottom
-                    )
+        // 从 DeviceOcrStrategy 获取当前屏的相对 ROI 配置
+        val roiRelativeList = DeviceOcrStrategy.getRelativeRois(template.machineId, screenIndex)
+
+        val roiConfigs = roiRelativeList.map { roi ->
+            OcrRoiConfig(
+                fieldKey = roi.fieldId,
+                fieldLabel = roi.label,
+                relativeRect = OcrRoiConfig.RectF(
+                    left = roi.xStartPct,
+                    top = roi.yStartPct,
+                    right = roi.xEndPct,
+                    bottom = roi.yEndPct
                 )
-            }
+            )
+        }
 
         val validRangeMap = roiConfigs.associate { config ->
             config.fieldKey to getValidRange(config.fieldLabel)
