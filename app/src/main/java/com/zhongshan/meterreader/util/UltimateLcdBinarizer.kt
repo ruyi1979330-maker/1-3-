@@ -218,10 +218,11 @@ object UltimateLcdBinarizer {
             } catch (_: Exception) {}
 
             return@withContext BinarizedImageResult(InputImage.fromBitmap(outBitmap, 0), roiYRanges)
+        } finally {
+            // 资源由资源池管理
         }
     }
 
-    /** 将整张图二值化，用于全屏识别 */
     suspend fun processFullScreen(
         bitmap: Bitmap,
         resourcePool: BinarizeResourcePool
@@ -266,6 +267,8 @@ object UltimateLcdBinarizer {
             } catch (_: Exception) {}
 
             return@withContext InputImage.fromBitmap(outBitmap, 0)
+        } finally {
+            // 资源由资源池管理
         }
     }
 }
