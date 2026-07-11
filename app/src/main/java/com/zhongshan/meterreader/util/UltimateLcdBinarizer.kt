@@ -149,11 +149,9 @@ object UltimateLcdBinarizer {
 
                 roiYRanges.add(Pair(currentYOffset, currentYOffset + boxHeight))
 
-                // 提取当前 ROI 区域像素
                 val roiPixels = IntArray(boxWidth * boxHeight)
                 bitmap.getPixels(roiPixels, 0, boxWidth, startX, startY, boxWidth, boxHeight)
 
-                // 计算平均灰度
                 var totalGray = 0L
                 for (pixel in roiPixels) {
                     val r = (pixel shr 16) and 0xFF; val g = (pixel shr 8) and 0xFF; val b = pixel and 0xFF
@@ -203,6 +201,8 @@ object UltimateLcdBinarizer {
             }
 
             return@withContext BinarizedImageResult(InputImage.fromBitmap(outBitmap, 0), roiYRanges)
+        } finally {
+            // 资源由资源池管理，无需额外释放
         }
     }
 }
