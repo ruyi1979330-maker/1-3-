@@ -39,17 +39,18 @@ object OCRFacade {
             return@withContext emptyMap()
         }
         DebugLogger.log("OCR", "图片尺寸: width=${bitmap.width}, height=${bitmap.height}, source=$source")
+
         try {
+            // 板交仍然走旧逻辑
             if (template.isHeatExchanger) {
                 val plateKeywordMap = TemplateManager.getPlateKeywordMap(template.roomId)
                 return@withContext OCREngine.extractPlateData(bitmap, template.roomId == 1, plateKeywordMap)
             }
 
+            // ==================== 螺杆机组：新流程 ====================
             val results = mutableMapOf<String, String>()
             val bmpWidth = bitmap.width
             val bmpHeight = bitmap.height
-            val cropDir = File(context.externalCacheDir, "ocr_crops")
-            if (!cropDir.exists()) cropDir.mkdirs()
 
             val rois = mutableListOf<Rect>()
             val fieldMapping = mutableListOf<String>()
@@ -57,6 +58,7 @@ object OCRFacade {
             when (source) {
                 ImageSource.CAMERA -> {
                     val hardRois = DeviceOcrStrategy.getHardcodedRois(template.machineId, screenIndex)
+                    DebugLogger.log("OCR", "CAMERA 模式，获取到 ${hardRois.size} 个绝对坐标 ROI")
                     for (roi in hardRois) {
                         val left = (roi.xPercent * bmpWidth).toInt().coerceIn(0, bmpWidth - 1)
                         val top = (roi.yPercent * bmpHeight).toInt().coerceIn(0, bmpHeight - 1)
@@ -64,10 +66,12 @@ object OCRFacade {
                         val bottom = ((roi.yPercent + roi.hPercent) * bmpHeight).toInt().coerceAtMost(bmpHeight)
                         rois.add(Rect(left, top, right, bottom))
                         fieldMapping.add(roi.fieldId)
+                        DebugLogger.log("OCR-ROI", "绝对ROI: ${roi.fieldId} → Rect($left, $top, $right, $bottom)")
                     }
                 }
                 ImageSource.GALLERY -> {
                     val relRois = DeviceOcrStrategy.getRelativeRois(template.machineId, screenIndex)
+                    DebugLogger.log("OCR", "GALLERY 模式，获取到 ${relRois.size} 个相对坐标 ROI")
                     for (roi in relRois) {
                         val left = (roi.xStartPct * bmpWidth).toInt().coerceIn(0, bmpWidth - 1)
                         val top = (roi.yStartPct * bmpHeight).toInt().coerceIn(0, bmpHeight - 1)
@@ -75,61 +79,72 @@ object OCRFacade {
                         val bottom = (roi.yEndPct * bmpHeight).toInt().coerceAtMost(bmpHeight)
                         rois.add(Rect(left, top, right, bottom))
                         fieldMapping.add(roi.fieldId)
+                        DebugLogger.log("OCR-ROI", "相对ROI: ${roi.fieldId} → Rect($left, $top, $right, $bottom)")
                     }
                 }
             }
 
-            if (rois.isEmpty()) return@withContext emptyMap()
-
-            val inputImage = UltimateLcdBinarizer.processBitmap(bitmap, rois, resourcePool)
-            if (inputImage == null) {
-                DebugLogger.log("OCR", "二值化拼版失败")
+            if (rois.isEmpty()) {
+                DebugLogger.log("OCR", "❌ ROI 列表为空，无法继续识别")
                 return@withContext emptyMap()
             }
 
-            // 【架构师加固】动态重建画布拼版切片的垂直坐标映射区间
-            val fieldYRanges = mutableListOf<Triple<Int, Int, String>>() // (开始Y, 结束Y, 字段ID)
+            // Step 1: 二值化拼版
+            val inputImage = UltimateLcdBinarizer.processBitmap(bitmap, rois, resourcePool)
+            if (inputImage == null) {
+                DebugLogger.log("OCR", "❌ 二值化拼版失败，processBitmap 返回 null")
+                return@withContext emptyMap()
+            }
+            DebugLogger.log("OCR", "✅ 二值化拼版成功")
+
+            // Step 2: 构建几何映射区间
+            val fieldYRanges = mutableListOf<Triple<Int, Int, String>>()
             var currentYOffset = 0
             for (i in rois.indices) {
                 val roi = rois[i]
-                val startX = roi.left.coerceIn(0, bmpWidth - 1)
-                val startY = roi.top.coerceIn(0, bmpHeight - 1)
-                val endX = roi.right.coerceIn(0, bmpWidth)
-                val endY = roi.bottom.coerceIn(0, bmpHeight)
-                val boxWidth = endX - startX
-                val boxHeight = endY - startY
-                if (boxWidth <= 0 || boxHeight <= 0) continue
-                
-                // 将当前ROI在拼版大图上的上下边界和它的FieldId死死绑定在一起
+                val boxHeight = roi.height()
+                if (boxHeight <= 0) continue
                 fieldYRanges.add(Triple(currentYOffset, currentYOffset + boxHeight, fieldMapping[i]))
                 currentYOffset += boxHeight + 4
             }
+            DebugLogger.log("OCR", "几何映射区间: ${fieldYRanges.joinToString { "(${it.first}-${it.second}:${it.third.split("|").last()})" }}")
 
+            // Step 3: ML Kit 识别
             val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
             val visionResult = recognizer.process(inputImage).await()
-            val lines = visionResult.textBlocks.flatMap { it.lines }
+            val allText = visionResult.text
+            DebugLogger.log("OCR-MLKit", "ML Kit 原始全文: \"$allText\"")
+            DebugLogger.log("OCR-MLKit", "文本块数量: ${visionResult.textBlocks.size}")
 
-            // 【架构师加固】基于文本行的几何中心点Y坐标，反向检索所属字段。从根本上免疫任何丢行错位故障！
-            for (line in lines) {
+            val lines = visionResult.textBlocks.flatMap { it.lines }
+            DebugLogger.log("OCR-MLKit", "识别行数: ${lines.size}")
+
+            for ((lineIdx, line) in lines.withIndex()) {
                 val lineBox = line.boundingBox
+                val lineText = line.text.trim()
+                DebugLogger.log("OCR-MLKit", "行[$lineIdx]: text=\"$lineText\", boundingBox=$lineBox")
+
                 if (lineBox != null) {
                     val lineCenterY = lineBox.centerY()
-                    // 寻找当前识别出来的行中心点落在哪一个ROI的区间内
                     val matchedField = fieldYRanges.find { lineCenterY in it.first..it.second }?.third
-                    
+
                     if (matchedField != null) {
-                        val text = line.text.trim()
-                        val normalized = text.replace(",", ".").replace(":", ".")
+                        val normalized = lineText.replace(",", ".").replace(":", ".")
                         val match = Regex("""\d{1,4}(\.\d{1,2})?""").find(normalized)
                         val number = match?.value
                         if (!number.isNullOrEmpty()) {
                             results[matchedField] = number
-                            DebugLogger.log("OCR", "几何精准对齐 -> 字段=$matchedField, 值=$number")
+                            DebugLogger.log("OCR", "✅ 几何对齐成功: 字段=$matchedField, 值=$number")
+                        } else {
+                            DebugLogger.log("OCR", "⚠️ 几何对齐到字段=$matchedField，但文本\"$lineText\"中未提取到有效数字")
                         }
+                    } else {
+                        DebugLogger.log("OCR", "⚠️ 行[$lineIdx] centerY=$lineCenterY 未落入任何ROI区间")
                     }
                 }
             }
 
+            DebugLogger.log("OCR", "最终识别结果: $results")
             return@withContext results
         } finally {
             bitmap.recycle()
