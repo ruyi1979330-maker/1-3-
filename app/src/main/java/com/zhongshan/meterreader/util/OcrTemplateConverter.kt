@@ -2,10 +2,6 @@ package com.zhongshan.meterreader.util
 
 import com.zhongshan.meterreader.data.DeviceTemplate
 
-/**
- * 现有业务模板 → OCR识别模板转换器
- * 零侵入原有数据结构，自动复用你已标定的ROI坐标
- */
 object OcrTemplateConverter {
 
     fun convert(template: DeviceTemplate, screenIndex: Int): MeterTemplateConfig {
@@ -35,7 +31,6 @@ object OcrTemplateConverter {
         )
     }
 
-    /** 根据字段名自动匹配合理数值范围，过滤离谱识别结果 */
     private fun getValidRange(label: String): ClosedFloatingPointRange<Float> {
         return when {
             label.contains("温度") -> -10f..150f
