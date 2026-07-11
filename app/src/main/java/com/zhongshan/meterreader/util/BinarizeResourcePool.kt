@@ -12,7 +12,7 @@ class BinarizeResourcePool : DefaultLifecycleObserver {
     private val yuvBuffer = AtomicReference<ByteArray>(null)
     private val canvasBuffer = AtomicReference<ByteArray>(null)
     
-    // 引入双缓冲机制，防止 ML Kit 异步读取时发生帧撕裂
+    // 双缓冲机制，防止异步处理时的帧撕裂
     private val reusedBitmaps = AtomicReferenceArray<Bitmap>(2)
     private val bitmapIndex = AtomicInteger(0)
 
