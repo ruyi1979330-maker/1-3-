@@ -143,7 +143,6 @@ object UltimateLcdBinarizer {
                 val boxWidth = endX - startX; val boxHeight = endY - startY
                 if (boxWidth <= 0 || boxHeight <= 0) {
                     roiYRanges.add(Pair(-1, -1))
-                    DebugLogger.log("Binarizer", "ROI[$roiIndex] 无效尺寸，跳过")
                     continue
                 }
 
@@ -152,7 +151,6 @@ object UltimateLcdBinarizer {
                 val roiPixels = IntArray(boxWidth * boxHeight)
                 bitmap.getPixels(roiPixels, 0, boxWidth, startX, startY, boxWidth, boxHeight)
 
-                // 第一轮：用初始阈值快速计算黑色占比
                 var totalGray = 0L
                 for (pixel in roiPixels) {
                     val r = (pixel shr 16) and 0xFF; val g = (pixel shr 8) and 0xFF; val b = pixel and 0xFF
@@ -168,16 +166,11 @@ object UltimateLcdBinarizer {
                 }
                 var blackPercent = (blackCount * 100f) / roiPixels.size
 
-                DebugLogger.log("Binarizer", "ROI[$roiIndex] 初始: 平均灰度=$avgGray, 阈值=$threshold, 黑色占比=${"%.1f".format(blackPercent)}%")
-
-                // 自适应调整：目标黑色占比 8%-30%
                 var attempts = 0
                 while (attempts < 10) {
                     if (blackPercent < 5f) {
-                        // 太白了，降低阈值（减小偏移量）
                         threshold = avgGray - (contrastOffset - (attempts + 1) * 5)
                     } else if (blackPercent > 35f) {
-                        // 太黑了，提高阈值（增大偏移量）
                         threshold = avgGray - (contrastOffset + (attempts + 1) * 5)
                     } else {
                         break
@@ -195,9 +188,6 @@ object UltimateLcdBinarizer {
                     attempts++
                 }
 
-                DebugLogger.log("Binarizer", "ROI[$roiIndex] 自适应调整$attempts 次 → 最终阈值=$threshold, 黑色占比=${"%.1f".format(blackPercent)}%")
-
-                // 用最终阈值写入画布
                 for (y in 0 until boxHeight) {
                     for (x in 0 until boxWidth) {
                         val pixel = roiPixels[y * boxWidth + x]
@@ -225,14 +215,57 @@ object UltimateLcdBinarizer {
                 if (!debugDir.exists()) debugDir.mkdirs()
                 val debugFile = File(debugDir, "spritesheet_${System.currentTimeMillis()}.png")
                 FileOutputStream(debugFile).use { fos -> outBitmap.compress(Bitmap.CompressFormat.PNG, 100, fos) }
-                DebugLogger.log("Binarizer", "拼版图已保存: ${debugFile.absolutePath}")
-            } catch (e: Exception) {
-                DebugLogger.log("Binarizer", "保存拼版图失败: ${e.message}")
-            }
+            } catch (_: Exception) {}
 
             return@withContext BinarizedImageResult(InputImage.fromBitmap(outBitmap, 0), roiYRanges)
-        } finally {
-            // 资源由资源池管理
+        }
+    }
+
+    /** 将整张图二值化，用于全屏识别 */
+    suspend fun processFullScreen(
+        bitmap: Bitmap,
+        resourcePool: BinarizeResourcePool
+    ): InputImage? = withContext(Dispatchers.IO) {
+        try {
+            val width = bitmap.width; val height = bitmap.height
+            val pixels = IntArray(width * height)
+            bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+
+            var totalGray = 0L
+            for (pixel in pixels) {
+                val r = (pixel shr 16) and 0xFF; val g = (pixel shr 8) and 0xFF; val b = pixel and 0xFF
+                totalGray += (0.299 * r + 0.587 * g + 0.114 * b).toInt()
+            }
+            val avgGray = (totalGray / pixels.size).toInt()
+            val threshold = (avgGray - 30).coerceIn(50, 200)
+
+            val canvasSize = width * height * 4
+            val canvasArray = resourcePool.acquireCanvasBuffer(canvasSize)
+            for (i in pixels.indices) {
+                val pixel = pixels[i]
+                val r = (pixel shr 16) and 0xFF; val g = (pixel shr 8) and 0xFF; val b = pixel and 0xFF
+                val gray = (0.299 * r + 0.587 * g + 0.114 * b).toInt()
+                val outIdx = i * 4
+                if (gray < threshold) {
+                    canvasArray[outIdx] = 0; canvasArray[outIdx+1] = 0; canvasArray[outIdx+2] = 0; canvasArray[outIdx+3] = 255.toByte()
+                } else {
+                    canvasArray[outIdx] = 255.toByte(); canvasArray[outIdx+1] = 255.toByte(); canvasArray[outIdx+2] = 255.toByte(); canvasArray[outIdx+3] = 255.toByte()
+                }
+            }
+
+            val outBitmap = resourcePool.acquireBitmap(width, height)
+            val byteBuffer = ByteBuffer.wrap(canvasArray, 0, canvasSize)
+            outBitmap.copyPixelsFromBuffer(byteBuffer)
+
+            try {
+                val debugDir = File("/sdcard/Download/ocr_debug")
+                if (!debugDir.exists()) debugDir.mkdirs()
+                val debugFile = File(debugDir, "fullscreen_${System.currentTimeMillis()}.png")
+                FileOutputStream(debugFile).use { fos -> outBitmap.compress(Bitmap.CompressFormat.PNG, 100, fos) }
+                DebugLogger.log("Binarizer", "全屏二值化已保存: ${debugFile.absolutePath}")
+            } catch (_: Exception) {}
+
+            return@withContext InputImage.fromBitmap(outBitmap, 0)
         }
     }
 }
