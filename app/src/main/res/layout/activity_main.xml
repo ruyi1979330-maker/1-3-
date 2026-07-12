@@ -90,7 +90,6 @@
             android:layout_height="match_parent"
             app:scaleType="fillCenter" />
 
-        <!-- 优化：改为更轻量的四边边框取景框，不遮挡中央画面 -->
         <View
             android:id="@+id/roiGuideTop"
             android:layout_width="match_parent"
@@ -141,7 +140,7 @@
             android:visibility="gone"
             app:layout_constraintTop_toTopOf="parent" />
 
-        <!-- 优化：移除大黑方块，改为底部半透明悬浮条显示数据 -->
+        <!-- 优化：改为底部半透明悬浮条，不遮挡相机画面 -->
         <TextView
             android:id="@+id/tvDataPreview"
             android:layout_width="match_parent"
