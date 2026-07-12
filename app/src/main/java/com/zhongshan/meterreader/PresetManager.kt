@@ -1,4 +1,7 @@
-	// 文件名: PresetManager.kt
+	// ====================文件名：PresetManager.kt 完整可直接复制代码====================
+	// 项目：医院特灵冷水机组OCR抄表APP
+	// 修改版本：V2.0 一级菜单固定冷冻泵直选重构
+	// 改动标记：所有新增/修改逻辑标注 //【本次重构改动点】
 	package com.zhongshan.meterreader
 	import android.content.Context
 	import android.content.SharedPreferences
@@ -11,6 +14,7 @@
 	        val defaultValue: String,
 	        val machineGroup: String
 	    )
+	    // 旧版8泵全量列表，保留用于向下兼容，不删除
 	    val availablePumps = listOf(
 	        "1号冷冻泵", "2号冷冻泵", "3号冷冻泵", "4号冷冻泵",
 	        "5号冷冻泵", "6号冷冻泵", "7号冷冻泵", "8号冷冻泵"
@@ -27,6 +31,13 @@
 	    private val machineToGroup = mapOf(
 	        "screw_1" to "trane_screw", "screw_2" to "trane_screw", "screw_3" to "trane_screw"
 	    )
+	    // 【本次重构改动点】固定泵组映射关系，全局唯一配置入口
+	    // 后期如需调整泵号绑定，仅需修改此映射，页面自动适配，禁止在Activity中写死泵号
+	    val fixedPumpMapping = mapOf(
+	        "screw_1_pumps" to listOf("7号冷冻泵", "8号冷冻泵"),
+	        "screw_2_pumps" to listOf("5号冷冻泵", "6号冷冻泵"),
+	        "screw_3_pumps" to listOf("3号冷冻泵", "4号冷冻泵")
+	    )
 	    private lateinit var prefs: SharedPreferences
 	    fun init(context: Context) {
 	        prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -34,6 +45,18 @@
 	        allItems.forEach {
 	            if (!prefs.contains(it.storageKey))
 	                editor.putString(it.storageKey, it.defaultValue)
+	        }
+	        // 【本次重构改动点】旧数据兼容迁移逻辑
+	        // 旧版允许在8台泵中任意勾选，新版仅保留属于该机组固定泵的勾选项
+	        // 过滤掉不属于固定泵映射的历史勾选数据，确保升级后行内复选框仅展示有效勾选
+	        fixedPumpMapping.forEach { (storageKey, fixedPumps) ->
+	            val raw = prefs.getString(storageKey, null)
+	            if (raw != null) {
+	                val oldPumps = raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+	                // 仅保留属于该机组固定泵列表中的勾选项，过滤无关泵号
+	                val validPumps = oldPumps.filter { fixedPumps.contains(it) }
+	                editor.putString(storageKey, validPumps.joinToString(","))
+	            }
 	        }
 	        editor.apply()
 	    }
@@ -69,11 +92,41 @@
 	    fun getPresetValue(storageKey: String, defaultValue: String): String {
 	        return prefs.getString(storageKey, defaultValue) ?: defaultValue
 	    }
+	    // 旧版多选泵读取方法，保留用于向下兼容，不删除
 	    fun getPumps(storageKey: String, defaultValue: String): List<String> {
 	        val raw = prefs.getString(storageKey, defaultValue) ?: defaultValue
 	        return raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
 	    }
+	    // 旧版多选泵保存方法，保留用于向下兼容，不删除
 	    fun savePumps(storageKey: String, pumps: List<String>) {
 	        prefs.edit().putString(storageKey, pumps.joinToString(",")).apply()
+	    }
+	    // 【本次重构改动点】获取指定机组绑定的固定泵列表
+	    // 页面渲染冷冻泵行时调用此方法，仅返回该机组专属的2台泵
+	    fun getFixedPumpsForItem(storageKey: String): List<String> {
+	        return fixedPumpMapping[storageKey] ?: emptyList()
+	    }
+	    // 【本次重构改动点】判断指定泵是否已勾选
+	    // 行内复选框渲染时调用，回显历史勾选状态
+	    fun isPumpSelected(storageKey: String, pumpName: String): Boolean {
+	        // 兼容旧版存储：如果该storageKey从未写入过，使用默认值
+	        val defaultValue = allItems.find { it.storageKey == storageKey }?.defaultValue ?: ""
+	        val currentPumps = getPumps(storageKey, defaultValue)
+	        return currentPumps.contains(pumpName)
+	    }
+	    // 【本次重构改动点】设置单个泵的勾选状态，实时持久化保存
+	    // 行内复选框状态变更时调用，勾选/取消勾选后立即写入本地缓存，无需二次确认
+	    fun setPumpSelected(storageKey: String, pumpName: String, isSelected: Boolean) {
+	        val defaultValue = allItems.find { it.storageKey == storageKey }?.defaultValue ?: ""
+	        val currentPumps = getPumps(storageKey, defaultValue).toMutableList()
+	        if (isSelected && !currentPumps.contains(pumpName)) {
+	            // 勾选：添加泵到列表
+	            currentPumps.add(pumpName)
+	        } else if (!isSelected) {
+	            // 取消勾选：从列表中移除泵
+	            currentPumps.remove(pumpName)
+	        }
+	        // 立即持久化保存
+	        savePumps(storageKey, currentPumps)
 	    }
 	}
