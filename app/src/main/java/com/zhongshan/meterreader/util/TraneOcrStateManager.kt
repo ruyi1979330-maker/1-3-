@@ -1,74 +1,66 @@
-	// ====================文件名：TraneOcrStateManager.kt 完整可直接复制代码====================
-	// 项目：医院特灵冷水机组OCR抄表APP
-	// 修改版本：V2.0 一级菜单固定冷冻泵直选重构
-	// 改动标记：所有新增/修改逻辑标注 //【本次重构改动点】
-	package com.zhongshan.meterreader.util
-	import com.zhongshan.meterreader.DebugLogger
-	class TraneOcrStateManager(
-	    private val requiredFieldIds: List<String>,
-	    private val onSuccess: (Map<String, String>) -> Unit
-	) {
-	    private val windowSize = 5
-	    private val lockThreshold = 3
-	    private val slidingWindows = mutableMapOf<String, MutableList<String>>()
-	    private val lockedResults = mutableMapOf<String, String>()
-	    // 【本次重构改动点】V2.0兼容性说明
-	    // 本类负责OCR抄表字段识别与锁定，不直接读取冷冻泵勾选配置
-	    // 冷冻泵预设配置由 PresetManager.getPumps() / getPresetsForMachine() 提供
-	    // V2.0重构后这两个接口签名与返回格式完全不变，上层OCR抄表业务无感知
-	    // TraneOcrStateManager 的 requiredFieldIds 和 onSuccess 回调机制保持不变
-	    // 无需任何功能性代码修改，仅添加兼容性注释标记
-	    fun processFrameResults(frameData: Map<String, String>) {
-	        var hasNewLock = false
-	        for ((fieldId, rawValue) in frameData) {
-	            if (lockedResults.containsKey(fieldId)) continue 
-	            val cleanValue = extractAndValidate(fieldId, rawValue)
-	            if (cleanValue != null) {
-	                val window = slidingWindows.getOrPut(fieldId) { mutableListOf() }
-	                window.add(cleanValue)
-	                if (window.size > windowSize) {
-	                    window.removeAt(0)
-	                }
-	                val valueCounts = window.groupingBy { it }.eachCount()
-	                val bestValue = valueCounts.maxByOrNull { it.value }
-	                if (bestValue != null && bestValue.value >= lockThreshold) {
-	                    lockedResults[fieldId] = bestValue.key
-	                    hasNewLock = true
-	                    DebugLogger.log("StateManager", "字段锁定 [$fieldId] -> ${bestValue.key}")
-	                }
+	// 文件名: TraneOcrStateManager.kt
+	package com.zhongshan.meterreader
+	import java.util.LinkedList
+	object TraneOcrStateManager {
+	    private const val WINDOW_SIZE = 5
+	    private const val SUCCESS_THRESHOLD = 3
+	    private val windowData = LinkedList<Map<String, String>>()
+	    private val lockedFields = mutableMapOf<String, String>()
+	    private var onSuccessCallback: ((Map<String, String>) -> Unit)? = null
+	    private var requiredFields: List<String> = emptyList()
+	    fun init(requiredFields: List<String>, callback: (Map<String, String>) -> Unit) {
+	        this.requiredFields = requiredFields
+	        this.onSuccessCallback = callback
+	        reset()
+	    }
+	    fun reset() {
+	        windowData.clear()
+	        lockedFields.clear()
+	    }
+	    fun submitFrame(data: Map<String, String>) {
+	        if (requiredFields.isEmpty()) return
+	        // 1. 业务前置校验
+	        val validatedData = mutableMapOf<String, String>()
+	        for ((key, value) in data) {
+	            if (isValid(key, value)) {
+	                validatedData[key] = value
 	            }
 	        }
-	        if (hasNewLock) {
-	            checkCompletion()
+	        // 2. 加入滑动窗口
+	        windowData.addLast(validatedData)
+	        if (windowData.size > WINDOW_SIZE) {
+	            windowData.removeFirst()
 	        }
-	    }
-	    private fun extractAndValidate(fieldId: String, rawValue: String): String? {
-	        val normalizedText = rawValue.replace(",", ".").replace(":", ".")
-	        val match = Regex("""\d{1,4}(\.\d{1,2})?""").find(normalizedText) ?: return null
-	        val valueStr = match.value
-	        val floatVal = valueStr.toFloatOrNull() ?: return null
-	        val isTemp = fieldId.contains("Temp") || fieldId.contains("温度") || fieldId.contains("水温")
-	        val isPressure = fieldId.contains("Pressure") || fieldId.contains("压力") || fieldId.contains("油压")
-	        val isCurrent = fieldId.contains("Current") || fieldId.contains("电流")
-	        val isLoad = fieldId.contains("Load") || fieldId.contains("负载") || fieldId.contains("RLA")
-	        when {
-	            isTemp -> if (floatVal !in -20f..150f) return null
-	            isPressure -> if (floatVal !in 0f..4000f) return null
-	            isCurrent -> if (floatVal !in 0f..2000f) return null
-	            isLoad -> if (floatVal !in 0f..150f) return null
-	            else -> if (floatVal !in 0f..9999f) return null
+	        // 3. 统计并检查锁定状态
+	        val voteCount = mutableMapOf<Pair<String, String>, Int>()
+	        for (frame in windowData) {
+	            for ((key, value) in frame) {
+	                val k = Pair(key, value)
+	                voteCount[k] = (voteCount[k] ?: 0) + 1
+	            }
 	        }
-	        return valueStr
-	    }
-	    private fun checkCompletion() {
-	        val allLocked = requiredFieldIds.all { lockedResults.containsKey(it) }
-	        if (allLocked && requiredFieldIds.isNotEmpty()) {
-	            onSuccess(lockedResults.toMap())
+	        for ((pair, count) in voteCount) {
+	            if (count >= SUCCESS_THRESHOLD) {
+	                lockedFields[pair.first] = pair.second
+	            }
+	        }
+	        // 4. 检查是否全部必需字段已锁定
+	        if (lockedFields.keys.containsAll(requiredFields)) {
+	            onSuccessCallback?.invoke(lockedFields.toMap())
 	            reset()
 	        }
 	    }
-	    fun reset() {
-	        slidingWindows.clear()
-	        lockedResults.clear()
+	    private fun isValid(key: String, value: String): Boolean {
+	        val match = Regex("""\d{1,4}(\.\d{1,2})?""").find(value) ?: return false
+	        if (match.value != value) return false
+	        val num = value.toFloatOrNull() ?: return false
+	        val label = if (key.contains("|")) key.split("|")[1] else ""
+	        return when {
+	            label.contains("温度") -> num in 0f..150f
+	            label.contains("压力") -> num in 0f..4000f
+	            label.contains("电流") -> num in 0f..2000f
+	            label.contains("负载") || label.contains("%RLA") -> num in 0f..150f
+	            else -> true
+	        }
 	    }
 	}
