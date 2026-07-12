@@ -148,14 +148,9 @@
 	                ) {
 	                    val newTemplate = TemplateManager.allTemplates[position]
 	                    if (selectedTemplate?.machineId != newTemplate.machineId) {
-	                        val oldMachineId = selectedTemplate?.machineId
 	                        selectedTemplate = newTemplate
 	                        currentScreenIndex = 0
-	                        lifecycleScope.launch {
-	                            if (oldMachineId != null) {
-	                                RecognitionResultHolder.clearMachineData(oldMachineId)
-	                            }
-	                        }
+	                        // 修复：移除清空旧机组数据的逻辑，保留所有机组数据供统一填表
 	                        binding.tvDataPreview.text = "已切换至 ${newTemplate.displayName}，请重新采集"
 	                        updateScreenProgress()
 	                        initOcrStateManager()
@@ -181,13 +176,17 @@
 	        binding.btnTransferAndFill.setOnClickListener {
 	            val template = selectedTemplate ?: return@setOnClickListener
 	            lifecycleScope.launch {
-	                val cachedData = RecognitionResultHolder.getFieldsForMachine(template.machineId)
-	                if (cachedData.isEmpty()) {
-	                    Toast.makeText(this@MainActivity, "暂无采集数据", Toast.LENGTH_SHORT).show()
-	                    return@launch
-	                }
 	                if (template.machineId in listOf("screw_1", "screw_2", "screw_3")) {
-	                    val fillData = buildScrewFillData(template.machineId, cachedData)
+	                    // 修复：获取所有螺杆机的数据合并提交
+	                    val allScrewData = mutableMapOf<String, String>()
+	                    allScrewData.putAll(RecognitionResultHolder.getFieldsForMachine("screw_1"))
+	                    allScrewData.putAll(RecognitionResultHolder.getFieldsForMachine("screw_2"))
+	                    allScrewData.putAll(RecognitionResultHolder.getFieldsForMachine("screw_3"))
+	                    if (allScrewData.isEmpty()) {
+	                        Toast.makeText(this@MainActivity, "暂无采集数据", Toast.LENGTH_SHORT).show()
+	                        return@launch
+	                    }
+	                    val fillData = buildScrewFillData(allScrewData)
 	                    val intent = Intent(this@MainActivity, WebViewActivity::class.java).apply {
 	                        putExtra("EXTRA_URL", template.formUrl)
 	                        putExtra("EXTRA_TAB_NAME", TemplateManager.getTabName(template))
@@ -198,6 +197,11 @@
 	                    return@launch
 	                }
 	                if (template.isHeatExchanger) {
+	                    val cachedData = RecognitionResultHolder.getFieldsForMachine(template.machineId)
+	                    if (cachedData.isEmpty()) {
+	                        Toast.makeText(this@MainActivity, "暂无采集数据", Toast.LENGTH_SHORT).show()
+	                        return@launch
+	                    }
 	                    val fillData = buildPlateFillData(template.machineId, cachedData)
 	                    val intent = Intent(this@MainActivity, WebViewActivity::class.java).apply {
 	                        putExtra("EXTRA_URL", template.formUrl)
@@ -305,45 +309,52 @@
 	            }
 	        }
 	    }
-	    private fun buildScrewFillData(machineId: String, cachedData: Map<String, String>): JSONObject {
+	    private fun buildScrewFillData(allCachedData: Map<String, String>): JSONObject {
 	        val root = JSONObject()
 	        root.put("operator", "")
-	        val unitNo = when (machineId) { "screw_1" -> 1; "screw_2" -> 2; "screw_3" -> 3; else -> return root }
-	        val baseNum = when (unitNo) { 1 -> 1; 2 -> 31; 3 -> 51; else -> return root }
-	        val unitData = mutableMapOf<String, String>()
-	        for ((key, value) in cachedData) {
-	            val parts = key.split("|")
-	            if (parts.size != 2) continue
-	            val fieldId = parts[0]; val label = parts[1]
-	            val idParts = fieldId.split("_")
-	            if (idParts.size == 3) {
-	                val num = idParts[2].toIntOrNull() ?: continue
-	                if (num in baseNum..(baseNum + 29)) {
-	                    val dataKey = labelToScrewDataKey(label)
-	                    if (dataKey != null) unitData[dataKey] = value
+	        // 修复：分别为 1、2、3 号机组构建数据
+	        for (unitNo in 1..3) {
+	            val machineId = "screw_$unitNo"
+	            val baseNum = when (unitNo) { 1 -> 1; 2 -> 31; 3 -> 51; else -> continue }
+	            val unitData = mutableMapOf<String, String>()
+	            for ((key, value) in allCachedData) {
+	                val parts = key.split("|")
+	                if (parts.size != 2) continue
+	                val fieldId = parts[0]
+	                val label = parts[1]
+	                val idParts = fieldId.split("_")
+	                if (idParts.size == 3) {
+	                    val num = idParts[2].toIntOrNull() ?: continue
+	                    if (num in baseNum..(baseNum + 29)) {
+	                        val dataKey = labelToScrewDataKey(label)
+	                        if (dataKey != null) unitData[dataKey] = value
+	                    }
+	                }
+	            }
+	            if (unitData.isNotEmpty()) {
+	                val unitJson = JSONObject()
+	                for ((k, v) in unitData) unitJson.put(k, v)
+	                val presets = PresetManager.getPresetsForMachine(machineId)
+	                for ((fieldIdWithLabel, value) in presets) {
+	                    val parts = fieldIdWithLabel.split("|")
+	                    if (parts.size != 2) continue
+	                    val dataKey = labelToScrewDataKey(parts[1])
+	                    if (dataKey != null) unitJson.put(dataKey, value)
+	                }
+	                val pumpsKey = "screw_${unitNo}_pumps"
+	                val pumpsStr = PresetManager.getPresetValue(pumpsKey, "")
+	                val pumpsList = pumpsStr.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+	                val pumpsArray = JSONArray()
+	                pumpsList.forEach { pumpsArray.put(it) }
+	                unitJson.put("pumps", pumpsArray)
+	                unitJson.put("remark", "")
+	                when (unitNo) {
+	                    1 -> root.put("unit1", unitJson)
+	                    2 -> root.put("unit2", unitJson)
+	                    3 -> root.put("unit3", unitJson)
 	                }
 	            }
 	        }
-	        if (unitData.isEmpty()) return root
-	        val unitJson = JSONObject()
-	        for ((k, v) in unitData) unitJson.put(k, v)
-	        val presets = PresetManager.getPresetsForMachine(machineId)
-	        for ((fieldIdWithLabel, value) in presets) {
-	            val parts = fieldIdWithLabel.split("|")
-	            if (parts.size != 2) continue
-	            val dataKey = labelToScrewDataKey(parts[1])
-	            if (dataKey != null) unitJson.put(dataKey, value)
-	        }
-	        val pumpsKey = when (machineId) { "screw_1" -> "screw_1_pumps"; "screw_2" -> "screw_2_pumps"; "screw_3" -> "screw_3_pumps"; else -> null }
-	        if (pumpsKey != null) {
-	            val pumpsStr = PresetManager.getPresetValue(pumpsKey, "")
-	            val pumpsList = pumpsStr.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-	            val pumpsArray = JSONArray()
-	            pumpsList.forEach { pumpsArray.put(it) }
-	            unitJson.put("pumps", pumpsArray)
-	        } else { unitJson.put("pumps", JSONArray()) }
-	        unitJson.put("remark", "")
-	        when (unitNo) { 1 -> root.put("unit1", unitJson); 2 -> root.put("unit2", unitJson); 3 -> root.put("unit3", unitJson) }
 	        return root
 	    }
 	    private fun labelToScrewDataKey(label: String): String? {
