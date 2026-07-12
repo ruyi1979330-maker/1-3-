@@ -3,7 +3,6 @@
 	import android.content.Context
 	import android.graphics.Bitmap
 	import android.graphics.Matrix
-	import android.graphics.Rect
 	import android.net.Uri
 	import android.widget.Toast
 	import androidx.camera.core.ImageProxy
@@ -21,7 +20,7 @@
 	object OCRFacade {
 	    /**
 	     * 阶段二/四：无感视频流识别接口
-	     * 优化：将相机流直接转为 Bitmap，复用图库的全图 OCR 逻辑，彻底解决相机预览尺寸不匹配和黑边导致的 ROI 坐标错位问题。
+	     * 优化：将相机流转为 Bitmap 并放大，复用全图 OCR 逻辑，解决预览尺寸过小导致识别为空的问题。
 	     */
 	    suspend fun performStreamOcr(
 	        imageProxy: ImageProxy,
@@ -29,16 +28,25 @@
 	        screenIndex: Int,
 	        resourcePool: BinarizeResourcePool
 	    ): Map<String, String> = withContext(Dispatchers.IO) {
-	        // 将 ImageProxy 转为 Bitmap 并处理旋转
 	        val rawBitmap = imageProxy.toBitmap()
 	        val rotation = imageProxy.imageInfo.rotationDegrees
-	        val bitmap = if (rotation != 0) {
+	        val rotatedBitmap = if (rotation != 0) {
 	            val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
 	            Bitmap.createBitmap(rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true).also {
 	                rawBitmap.recycle()
 	            }
 	        } else {
 	            rawBitmap
+	        }
+	        // 修复：如果图片太小，强制放大以提升 ML Kit 对小屏幕文本的识别率
+	        val targetWidth = 1080
+	        val bitmap = if (rotatedBitmap.width < targetWidth) {
+	            val scale = targetWidth.toFloat() / rotatedBitmap.width
+	            Bitmap.createScaledBitmap(rotatedBitmap, targetWidth, (rotatedBitmap.height * scale).toInt(), true).also {
+	                if (it != rotatedBitmap) rotatedBitmap.recycle()
+	            }
+	        } else {
+	            rotatedBitmap
 	        }
 	        try {
 	            if (template.isHeatExchanger) {
