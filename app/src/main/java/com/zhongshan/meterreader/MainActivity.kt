@@ -200,6 +200,8 @@ class MainActivity : AppCompatActivity() {
                 galleryPickLauncher.launch("image/*")
             }
         }
+        
+        // 新增：清除数据按钮逻辑
         binding.btnClearData.setOnClickListener {
             lifecycleScope.launch {
                 RecognitionResultHolder.clearAll()
@@ -210,6 +212,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+
         binding.btnRoiCalibration.visibility = View.GONE
         binding.btnRoiCalibration.isEnabled = false
         binding.btnPresetSettings.setOnClickListener {
@@ -242,10 +245,15 @@ class MainActivity : AppCompatActivity() {
                         putExtra("EXTRA_FILL_TYPE", "screw")
                     }
                     startActivity(intent)
-                    // 清除缓存
+                    
+                    // 新增：填表成功后自动清除螺杆机组缓存
                     RecognitionResultHolder.clearMachineData("screw_1")
                     RecognitionResultHolder.clearMachineData("screw_2")
                     RecognitionResultHolder.clearMachineData("screw_3")
+                    withContext(Dispatchers.Main) {
+                        binding.tvDataPreview.text = "待采集..."
+                        updateScreenProgress()
+                    }
                     return@launch
                 }
                 if (template.isHeatExchanger) {
@@ -262,8 +270,13 @@ class MainActivity : AppCompatActivity() {
                         putExtra("EXTRA_FILL_TYPE", "plate")
                     }
                     startActivity(intent)
-                    // 清除缓存
+                    
+                    // 新增：填表成功后自动清除板交缓存
                     RecognitionResultHolder.clearMachineData(template.machineId)
+                    withContext(Dispatchers.Main) {
+                        binding.tvDataPreview.text = "待采集..."
+                        updateScreenProgress()
+                    }
                     return@launch
                 }
             }
@@ -365,7 +378,7 @@ class MainActivity : AppCompatActivity() {
     private fun buildScrewFillData(allCachedData: Map<String, String>): JSONObject {
         val root = JSONObject()
         root.put("operator", "")
-
+        
         val allScrewKeys = listOf(
             "evapInTemp", "evapOutTemp", "evapInPressure", "evapOutPressure",
             "evapRefPressure", "evapTemp", "condInTemp", "condOutTemp",
@@ -377,7 +390,9 @@ class MainActivity : AppCompatActivity() {
             val machineId = "screw_$unitNo"
             val baseNum = when (unitNo) { 1 -> 1; 2 -> 31; 3 -> 51; else -> continue }
             val unitData = mutableMapOf<String, String>()
-            // 初始化所有字段为空字符串
+            var hasRealData = false
+            
+            // 初始化所有字段为空字符串，确保 JSON 完整性
             for (key in allScrewKeys) {
                 unitData[key] = ""
             }
@@ -392,34 +407,40 @@ class MainActivity : AppCompatActivity() {
                     val num = idParts[2].toIntOrNull() ?: continue
                     if (num in baseNum..(baseNum + 29)) {
                         val dataKey = labelToScrewDataKey(label)
-                        if (dataKey != null) unitData[dataKey] = value
+                        if (dataKey != null) {
+                            unitData[dataKey] = value
+                            hasRealData = true
+                        }
                     }
                 }
             }
 
-            val unitJson = JSONObject()
-            for ((k, v) in unitData) unitJson.put(k, v)
+            // 只有当存在真实识别数据时，才注入预设数据并输出该机组 JSON
+            if (hasRealData) {
+                val unitJson = JSONObject()
+                for ((k, v) in unitData) unitJson.put(k, v)
 
-            val presets = PresetManager.getPresetsForMachine(machineId)
-            for ((fieldIdWithLabel, value) in presets) {
-                val parts = fieldIdWithLabel.split("|")
-                if (parts.size != 2) continue
-                val dataKey = labelToScrewDataKey(parts[1])
-                if (dataKey != null) unitJson.put(dataKey, value)
-            }
+                val presets = PresetManager.getPresetsForMachine(machineId)
+                for ((fieldIdWithLabel, value) in presets) {
+                    val parts = fieldIdWithLabel.split("|")
+                    if (parts.size != 2) continue
+                    val dataKey = labelToScrewDataKey(parts[1])
+                    if (dataKey != null) unitJson.put(dataKey, value)
+                }
 
-            val pumpsKey = "screw_${unitNo}_pumps"
-            val pumpsStr = PresetManager.getPresetValue(pumpsKey, "")
-            val pumpsList = pumpsStr.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-            val pumpsArray = JSONArray()
-            pumpsList.forEach { pumpsArray.put(it) }
-            unitJson.put("pumps", pumpsArray)
-            unitJson.put("remark", "")
+                val pumpsKey = "screw_${unitNo}_pumps"
+                val pumpsStr = PresetManager.getPresetValue(pumpsKey, "")
+                val pumpsList = pumpsStr.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                val pumpsArray = JSONArray()
+                pumpsList.forEach { pumpsArray.put(it) }
+                unitJson.put("pumps", pumpsArray)
+                unitJson.put("remark", "")
 
-            when (unitNo) {
-                1 -> root.put("unit1", unitJson)
-                2 -> root.put("unit2", unitJson)
-                3 -> root.put("unit3", unitJson)
+                when (unitNo) {
+                    1 -> root.put("unit1", unitJson)
+                    2 -> root.put("unit2", unitJson)
+                    3 -> root.put("unit3", unitJson)
+                }
             }
         }
         return root
@@ -437,7 +458,8 @@ class MainActivity : AppCompatActivity() {
             "冷凝器出口水温", "冷凝器出水温度" -> "condOutTemp"
             "冷凝器进口水压" -> "condInPressure"
             "冷凝器出口水压" -> "condOutPressure"
-            "冷凝器冷媒压力", "冷凝器制冷剂压力" -> "condRefPressure"
+            // 修复：补充 "冷凝器冷凝压力" 映射，解决2号机组无法填入问题
+            "冷凝器冷媒压力", "冷凝器制冷剂压力", "冷凝器冷凝压力" -> "condRefPressure"
             "冷凝器冷凝温度", "冷凝器制冷剂饱和温度" -> "condTemp"
             "压缩机油压", "油压" -> "compOilPressure"
             "压缩机排出口温度", "压缩机排出端冷剂温度" -> "compDischargeTemp"
@@ -451,7 +473,7 @@ class MainActivity : AppCompatActivity() {
         val root = JSONObject()
         val groupsArray = JSONArray()
         val groupDefs = plateGroupDefs[machineId] ?: return root
-
+        
         val allPlateKeys = listOf("inTemp", "outTemp", "inPressure", "outPressure", "steamPressure", "pumpCurrent", "remark")
 
         for ((groupTitle, prefix) in groupDefs) {
