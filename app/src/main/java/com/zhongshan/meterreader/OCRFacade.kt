@@ -18,34 +18,6 @@
 	import kotlinx.coroutines.withContext
 	enum class ImageSource { CAMERA, GALLERY }
 	object OCRFacade {
-	    private const val TARGET_WIDTH = 3000
-	    private const val TARGET_HEIGHT = 4000
-	    private val evaporatorRois = listOf(
-	        Rect(1860, 920, 2850, 1320) to "field_1_01|蒸发器进口水温",
-	        Rect(1860, 1400, 2850, 1800) to "field_1_02|蒸发器出口水温",
-	        Rect(1860, 1880, 2850, 2280) to "field_1_06|蒸发器蒸发温度",
-	        Rect(1740, 2360, 2850, 2800) to "field_1_05|蒸发器冷媒压力"
-	    )
-	    private val condenserRois = listOf(
-	        Rect(1860, 920, 2850, 1320) to "field_1_08|冷凝器进口水温",
-	        Rect(1860, 1400, 2850, 1800) to "field_1_09|冷凝器出口水温",
-	        Rect(1860, 1880, 2850, 2280) to "field_1_13|冷凝器冷凝温度",
-	        Rect(1740, 2360, 2850, 2800) to "field_1_12|冷凝器冷媒压力"
-	    )
-	    private val compressorRois = listOf(
-	        Rect(150, 920, 1200, 1400) to "field_1_14|压缩机油压",
-	        Rect(1740, 1880, 2850, 2280) to "field_1_15|压缩机排出口温度",
-	        Rect(1050, 2520, 2100, 3040) to "field_1_18|主机负载",
-	        Rect(1050, 3120, 2160, 3640) to "field_1_17|电机电流"
-	    )
-	    private fun getRoisForScreen(screenIndex: Int): List<Pair<Rect, String>> {
-	        return when (screenIndex) {
-	            0 -> evaporatorRois
-	            1 -> condenserRois
-	            2 -> compressorRois
-	            else -> emptyList()
-	        }
-	    }
 	    /**
 	     * 阶段二/四：无感视频流识别接口
 	     */
@@ -56,7 +28,10 @@
 	        resourcePool: BinarizeResourcePool
 	    ): Map<String, String> = withContext(Dispatchers.IO) {
 	        val relativeRois = DeviceOcrStrategy.getRelativeRois(template.machineId, screenIndex)
-	        if (relativeRois.isEmpty()) return@withContext emptyMap()
+	        if (relativeRois.isEmpty()) {
+	            DebugLogger.log("StreamOCR", "未找到相对坐标配置: ${template.machineId}, 屏: $screenIndex")
+	            return@withContext emptyMap()
+	        }
 	        val imgWidth = imageProxy.width
 	        val imgHeight = imageProxy.height
 	        val rois = relativeRois.map { roi ->
@@ -69,10 +44,14 @@
 	        }
 	        val fieldMapping = relativeRois.map { it.fieldId }
 	        val binarizeResult = UltimateLcdBinarizer.processImageProxy(imageProxy, rois, resourcePool)
-	        if (binarizeResult == null) return@withContext emptyMap()
+	        if (binarizeResult == null) {
+	            DebugLogger.log("StreamOCR", "二值化结果为空")
+	            return@withContext emptyMap()
+	        }
 	        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 	        val visionResult = recognizer.process(binarizeResult.inputImage).await()
 	        val lines = visionResult.textBlocks.flatMap { block -> block.lines }
+	        DebugLogger.log("StreamOCR", "ML Kit 识别到 ${lines.size} 行文本: ${lines.joinToString { it.text }}")
 	        val results = mutableMapOf<String, String>()
 	        for (line in lines) {
 	            val box = line.boundingBox ?: continue
@@ -91,13 +70,8 @@
 	                }
 	            }
 	        }
-	        val finalResults = mutableMapOf<String, String>()
-	        for (fieldId in fieldMapping) {
-	            if (fieldId in results) {
-	                finalResults[fieldId] = results[fieldId]!!
-	            }
-	        }
-	        return@withContext finalResults
+	        DebugLogger.log("StreamOCR", "帧匹配最终结果: $results")
+	        return@withContext results
 	    }
 	    /**
 	     * 兼容原相册模式的单张图片识别接口
@@ -120,16 +94,26 @@
 	                val plateKeywordMap = TemplateManager.getPlateKeywordMap(template.roomId)
 	                return@withContext OCREngine.extractPlateData(bitmap, template.roomId == 1, plateKeywordMap)
 	            }
-	            val scaledBitmap = Bitmap.createScaledBitmap(bitmap, TARGET_WIDTH, TARGET_HEIGHT, true)
-	            val roisWithFields = getRoisForScreen(screenIndex)
-	            val rois = roisWithFields.map { it.first }
-	            val fieldMapping = roisWithFields.map { it.second }
-	            val binarizeResult = UltimateLcdBinarizer.processBitmap(scaledBitmap, rois, resourcePool)
-	            scaledBitmap.recycle()
+	            // 修改：图库模式统一使用相对百分比坐标，适配任意尺寸的裁剪图
+	            val relativeRois = DeviceOcrStrategy.getRelativeRois(template.machineId, screenIndex)
+	            if (relativeRois.isEmpty()) return@withContext emptyMap()
+	            val imgWidth = bitmap.width
+	            val imgHeight = bitmap.height
+	            val rois = relativeRois.map { roi ->
+	                Rect(
+	                    (roi.xStartPct * imgWidth).toInt(),
+	                    (roi.yStartPct * imgHeight).toInt(),
+	                    (roi.xEndPct * imgWidth).toInt(),
+	                    (roi.yEndPct * imgHeight).toInt()
+	                )
+	            }
+	            val fieldMapping = relativeRois.map { it.fieldId }
+	            val binarizeResult = UltimateLcdBinarizer.processBitmap(bitmap, rois, resourcePool)
 	            if (binarizeResult == null) return@withContext emptyMap()
 	            val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 	            val visionResult = recognizer.process(binarizeResult.inputImage).await()
 	            val lines = visionResult.textBlocks.flatMap { block -> block.lines }
+	            DebugLogger.log("SmartOCR", "相册识别到 ${lines.size} 行文本: ${lines.joinToString { it.text }}")
 	            val results = mutableMapOf<String, String>()
 	            for (line in lines) {
 	                val box = line.boundingBox ?: continue
@@ -154,6 +138,7 @@
 	                    finalResults[fieldId] = results[fieldId]!!
 	                }
 	            }
+	            DebugLogger.log("SmartOCR", "相册识别最终结果: $finalResults")
 	            return@withContext finalResults
 	        } finally {
 	            bitmap.recycle()
