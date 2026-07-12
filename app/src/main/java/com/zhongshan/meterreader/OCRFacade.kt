@@ -11,6 +11,7 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.zhongshan.meterreader.data.DeviceTemplate
 import com.zhongshan.meterreader.util.BinarizeResourcePool
+import com.zhongshan.meterreader.util.OCREngine
 import com.zhongshan.meterreader.util.StorageAndImageUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
@@ -24,9 +25,9 @@ object OCRFacade {
     private const val TARGET_WIDTH = 3000
     private const val TARGET_HEIGHT = 4000
 
-    suspend fun process(
+    suspend fun performSmartOcr(
         context: Context,
-        uri: Uri,
+        imageUri: Uri,
         template: DeviceTemplate,
         screenIndex: Int,
         imageSource: ImageSource,
@@ -41,10 +42,17 @@ object OCRFacade {
             DebugLogger.log("OCR-Facade", "===== 开始处理图片 =====")
             DebugLogger.log("OCR-Facade", "来源: $imageSource, 屏幕索引: $screenIndex")
             
-            originalBitmap = StorageAndImageUtils.getBitmapFromUri(context, uri)
+            // 修复点：使用项目中真实存在且安全的图片加载方法
+            originalBitmap = StorageAndImageUtils.loadAndFixExifMatrixSecurely(context, imageUri)
             if (originalBitmap == null) {
-                DebugLogger.log("OCR-Facade-Error", "无法加载图片 Uri: $uri")
+                DebugLogger.log("OCR-Facade-Error", "无法加载图片 Uri: $imageUri")
                 return@withContext emptyMap()
+            }
+
+            // 修复点：恢复板交（换热器）的专属提交流程（铁律：不破坏已有稳定模块）
+            if (template.isHeatExchanger) {
+                val plateKeywordMap = TemplateManager.getPlateKeywordMap(template.roomId)
+                return@withContext OCREngine.extractPlateData(originalBitmap, template.roomId == 1, plateKeywordMap)
             }
 
             val rois = mutableListOf<Rect>()
