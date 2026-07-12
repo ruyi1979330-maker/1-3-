@@ -55,12 +55,17 @@ object OCREngine {
             rawLines.sortBy { it.first }
             val distinctLines = mutableListOf<Pair<Int, String>>()
             var lastY = -1000
+            var lastText = ""
             for (pair in rawLines) {
                 if (pair.second.isBlank()) continue
-                if (pair.first - lastY > 20) {
-                    distinctLines.add(pair)
-                    lastY = pair.first
+                // 修复：原逻辑仅通过Y坐标差>20去重，在高分辨率长截图中可能误删行距较小的相邻行。
+                // 改为仅在Y坐标差极小且文本内容相同时去重，避免有效数据丢失。
+                if (pair.first - lastY <= 10 && pair.second == lastText) {
+                    continue
                 }
+                distinctLines.add(pair)
+                lastY = pair.first
+                lastText = pair.second
             }
             val extractedNumbers = mutableListOf<ExtractedNumber>()
             for ((y, lineText) in distinctLines) {
