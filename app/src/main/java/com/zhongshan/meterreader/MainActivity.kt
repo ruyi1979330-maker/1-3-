@@ -71,7 +71,6 @@ class MainActivity : AppCompatActivity() {
         else Toast.makeText(this, "需授予相机权限才能自动抄表", Toast.LENGTH_SHORT).show()
     }
 
-    // 改为多图选择
     private val galleryPickLauncher = registerForActivityResult(
         ActivityResultContracts.GetMultipleContents()
     ) { uris ->
@@ -201,7 +200,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
         
-        // 新增：清除数据按钮逻辑
         binding.btnClearData.setOnClickListener {
             lifecycleScope.launch {
                 RecognitionResultHolder.clearAll()
@@ -246,7 +244,6 @@ class MainActivity : AppCompatActivity() {
                     }
                     startActivity(intent)
                     
-                    // 新增：填表成功后自动清除螺杆机组缓存
                     RecognitionResultHolder.clearMachineData("screw_1")
                     RecognitionResultHolder.clearMachineData("screw_2")
                     RecognitionResultHolder.clearMachineData("screw_3")
@@ -271,7 +268,6 @@ class MainActivity : AppCompatActivity() {
                     }
                     startActivity(intent)
                     
-                    // 新增：填表成功后自动清除板交缓存
                     RecognitionResultHolder.clearMachineData(template.machineId)
                     withContext(Dispatchers.Main) {
                         binding.tvDataPreview.text = "待采集..."
@@ -392,7 +388,6 @@ class MainActivity : AppCompatActivity() {
             val unitData = mutableMapOf<String, String>()
             var hasRealData = false
             
-            // 初始化所有字段为空字符串，确保 JSON 完整性
             for (key in allScrewKeys) {
                 unitData[key] = ""
             }
@@ -415,7 +410,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            // 只有当存在真实识别数据时，才注入预设数据并输出该机组 JSON
             if (hasRealData) {
                 val unitJson = JSONObject()
                 for ((k, v) in unitData) unitJson.put(k, v)
@@ -458,7 +452,6 @@ class MainActivity : AppCompatActivity() {
             "冷凝器出口水温", "冷凝器出水温度" -> "condOutTemp"
             "冷凝器进口水压" -> "condInPressure"
             "冷凝器出口水压" -> "condOutPressure"
-            // 修复：补充 "冷凝器冷凝压力" 映射，解决2号机组无法填入问题
             "冷凝器冷媒压力", "冷凝器制冷剂压力", "冷凝器冷凝压力" -> "condRefPressure"
             "冷凝器冷凝温度", "冷凝器制冷剂饱和温度" -> "condTemp"
             "压缩机油压", "油压" -> "compOilPressure"
@@ -478,7 +471,6 @@ class MainActivity : AppCompatActivity() {
 
         for ((groupTitle, prefix) in groupDefs) {
             val fields = JSONObject()
-            // 初始化所有字段为空字符串
             for (key in allPlateKeys) {
                 fields.put(key, "")
             }
