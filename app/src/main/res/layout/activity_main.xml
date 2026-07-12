@@ -1,133 +1,136 @@
-<?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout
-    xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:background="@color/bg_light_gray">
-
-    <androidx.cardview.widget.CardView
-        android:id="@+id/cardTop"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_margin="12dp"
-        app:cardCornerRadius="8dp"
-        app:cardElevation="4dp"
-        app:layout_constraintTop_toTopOf="parent">
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="16dp">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="当前抄表机组/设备"
-                android:textStyle="bold"
-                android:textColor="@color/text_primary" />
-
-            <Spinner
-                android:id="@+id/spinnerDevice"
-                android:layout_width="match_parent"
-                android:layout_height="48dp"
-                android:layout_marginTop="8dp"
-                android:background="@drawable/bg_spinner" />
-        </LinearLayout>
-    </androidx.cardview.widget.CardView>
-
-    <LinearLayout
-        android:id="@+id/layoutActionButtons"
-        android:layout_width="match_parent"
-        android:layout_height="64dp"
-        android:layout_marginTop="16dp"
-        android:layout_marginStart="12dp"
-        android:layout_marginEnd="12dp"
-        android:orientation="horizontal"
-        app:layout_constraintTop_toBottomOf="@id/cardTop">
-
-        <Button
-            android:id="@+id/btnLaunchCamera"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:layout_marginEnd="6dp"
-            android:text="📷 拍照"
-            android:textStyle="bold" />
-
-        <Button
-            android:id="@+id/btnGallery"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:layout_marginEnd="6dp"
-            android:text="🖼 相册"
-            style="?attr/materialButtonOutlinedStyle" />
-
-        <!-- 【定标按钮】 -->
-        <Button
-            android:id="@+id/btnRoiCalibration"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:layout_marginEnd="6dp"
-            android:text="📐 定标"
-            style="?attr/materialButtonOutlinedStyle"
-            android:textColor="@color/primary_blue"/>
-
-        <ImageButton
-            android:id="@+id/btnPresetSettings"
-            android:layout_width="64dp"
-            android:layout_height="match_parent"
-            android:src="@drawable/ic_settings"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="预设配置"
-            app:tint="@color/text_secondary" />
-    </LinearLayout>
-
-    <ProgressBar
-        android:id="@+id/progressBar"
-        style="?android:attr/progressBarStyleHorizontal"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_margin="12dp"
-        android:indeterminate="true"
-        android:visibility="gone"
-        app:layout_constraintTop_toBottomOf="@id/layoutActionButtons" />
-
-    <androidx.cardview.widget.CardView
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_margin="12dp"
-        app:cardCornerRadius="8dp"
-        app:layout_constraintTop_toBottomOf="@id/progressBar"
-        app:layout_constraintBottom_toTopOf="@id/btnTransferAndFill">
-
-        <ScrollView
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:padding="12dp">
-            <TextView
-                android:id="@+id/tvDataPreview"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="待采集..."
-                android:textSize="16sp"
-                android:fontFamily="monospace"
-                android:textColor="@color/text_secondary" />
-        </ScrollView>
-    </androidx.cardview.widget.CardView>
-
-    <Button
-        android:id="@+id/btnTransferAndFill"
-        android:layout_width="match_parent"
-        android:layout_height="72dp"
-        android:layout_margin="12dp"
-        android:text="🚀 推送至表单系统"
-        android:textSize="20sp"
-        android:textStyle="bold"
-        android:backgroundTint="@color/green_success"
-        app:layout_constraintBottom_toBottomOf="parent" />
-
-</androidx.constraintlayout.widget.ConstraintLayout>
+	<!-- 文件名: activity_main.xml -->
+	<?xml version="1.0" encoding="utf-8"?>
+	<androidx.constraintlayout.widget.ConstraintLayout
+	    xmlns:android="http://schemas.android.com/apk/res/android"
+	    xmlns:app="http://schemas.android.com/apk/res-auto"
+	    android:layout_width="match_parent"
+	    android:layout_height="match_parent"
+	    android:background="@color/bg_light_gray">
+	    <androidx.cardview.widget.CardView
+	        android:id="@+id/cardTop"
+	        android:layout_width="match_parent"
+	        android:layout_height="wrap_content"
+	        android:layout_margin="12dp"
+	        app:cardCornerRadius="8dp"
+	        app:cardElevation="4dp"
+	        app:layout_constraintTop_toTopOf="parent">
+	        <LinearLayout
+	            android:layout_width="match_parent"
+	            android:layout_height="wrap_content"
+	            android:orientation="vertical"
+	            android:padding="16dp">
+	            <TextView
+	                android:layout_width="wrap_content"
+	                android:layout_height="wrap_content"
+	                android:text="当前抄表机组/设备"
+	                android:textStyle="bold"
+	                android:textColor="@color/text_primary" />
+	            <Spinner
+	                android:id="@+id/spinnerDevice"
+	                android:layout_width="match_parent"
+	                android:layout_height="48dp"
+	                android:layout_marginTop="8dp"
+	                android:background="@drawable/bg_spinner" />
+	        </LinearLayout>
+	    </androidx.cardview.widget.CardView>
+	    <LinearLayout
+	        android:id="@+id/layoutActionButtons"
+	        android:layout_width="match_parent"
+	        android:layout_height="64dp"
+	        android:layout_marginTop="16dp"
+	        android:layout_marginStart="12dp"
+	        android:layout_marginEnd="12dp"
+	        android:orientation="horizontal"
+	        app:layout_constraintTop_toBottomOf="@id/cardTop">
+	        <Button
+	            android:id="@+id/btnGallery"
+	            android:layout_width="0dp"
+	            android:layout_height="match_parent"
+	            android:layout_weight="1"
+	            android:layout_marginEnd="6dp"
+	            android:text="🖼 相册"
+	            style="?attr/materialButtonOutlinedStyle" />
+	        <Button
+	            android:id="@+id/btnRoiCalibration"
+	            android:layout_width="0dp"
+	            android:layout_height="match_parent"
+	            android:layout_weight="1"
+	            android:layout_marginEnd="6dp"
+	            android:text="📐 定标"
+	            style="?attr/materialButtonOutlinedStyle"
+	            android:textColor="@color/primary_blue"/>
+	        <ImageButton
+	            android:id="@+id/btnPresetSettings"
+	            android:layout_width="64dp"
+	            android:layout_height="match_parent"
+	            android:src="@drawable/ic_settings"
+	            android:background="?attr/selectableItemBackgroundBorderless"
+	            android:contentDescription="预设配置"
+	            app:tint="@color/text_secondary" />
+	    </LinearLayout>
+	    <androidx.constraintlayout.widget.ConstraintLayout
+	        android:id="@+id/cameraContainer"
+	        android:layout_width="match_parent"
+	        android:layout_height="0dp"
+	        android:layout_margin="12dp"
+	        app:layout_constraintTop_toBottomOf="@id/layoutActionButtons"
+	        app:layout_constraintBottom_toTopOf="@id/btnTransferAndFill">
+	        <androidx.camera.view.PreviewView
+	            android:id="@+id/viewFinder"
+	            android:layout_width="match_parent"
+	            android:layout_height="match_parent"
+	            app:scaleType="fillCenter" />
+	        <!-- 半透明黄色取景对齐框 (ROI Guide) -->
+	        <View
+	            android:id="@+id/roiGuide"
+	            android:layout_width="match_parent"
+	            android:layout_height="match_parent"
+	            android:layout_margin="24dp"
+	            android:background="#4DFFEB3B"
+	            app:layout_constraintTop_toTopOf="parent"
+	            app:layout_constraintBottom_toBottomOf="parent"
+	            app:layout_constraintStart_toStartOf="parent"
+	            app:layout_constraintEnd_toEndOf="parent" />
+	        <ProgressBar
+	            android:id="@+id/progressBar"
+	            style="?android:attr/progressBarStyleHorizontal"
+	            android:layout_width="match_parent"
+	            android:layout_height="wrap_content"
+	            android:layout_margin="12dp"
+	            android:indeterminate="true"
+	            android:visibility="gone"
+	            app:layout_constraintTop_toTopOf="parent" />
+	        <androidx.cardview.widget.CardView
+	            android:layout_width="match_parent"
+	            android:layout_height="0dp"
+	            android:layout_margin="12dp"
+	            app:cardCornerRadius="8dp"
+	            app:cardBackgroundColor="#E6000000"
+	            app:layout_constraintTop_toTopOf="parent"
+	            app:layout_constraintBottom_toBottomOf="parent">
+	            <ScrollView
+	                android:layout_width="match_parent"
+	                android:layout_height="match_parent"
+	                android:padding="12dp">
+	                <TextView
+	                    android:id="@+id/tvDataPreview"
+	                    android:layout_width="match_parent"
+	                    android:layout_height="wrap_content"
+	                    android:text="待采集..."
+	                    android:textSize="16sp"
+	                    android:fontFamily="monospace"
+	                    android:textColor="#FFFFFF" />
+	            </ScrollView>
+	        </androidx.cardview.widget.CardView>
+	    </androidx.constraintlayout.widget.ConstraintLayout>
+	    <Button
+	        android:id="@+id/btnTransferAndFill"
+	        android:layout_width="match_parent"
+	        android:layout_height="72dp"
+	        android:layout_margin="12dp"
+	        android:text="🚀 推送至表单系统"
+	        android:textSize="20sp"
+	        android:textStyle="bold"
+	        android:backgroundTint="@color/green_success"
+	        app:layout_constraintBottom_toBottomOf="parent" />
+	</androidx.constraintlayout.widget.ConstraintLayout>
