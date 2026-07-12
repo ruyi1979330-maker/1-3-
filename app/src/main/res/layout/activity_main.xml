@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 文件名: activity_main.xml -->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
@@ -89,15 +90,45 @@
             android:layout_height="match_parent"
             app:scaleType="fillCenter" />
 
+        <!-- 优化：改为更轻量的四边边框取景框，不遮挡中央画面 -->
         <View
-            android:id="@+id/roiGuide"
+            android:id="@+id/roiGuideTop"
             android:layout_width="match_parent"
+            android:layout_height="4dp"
+            android:layout_marginStart="24dp"
+            android:layout_marginEnd="24dp"
+            android:layout_marginTop="24dp"
+            android:background="#CCFFEB3B"
+            app:layout_constraintTop_toTopOf="parent" />
+
+        <View
+            android:id="@+id/roiGuideBottom"
+            android:layout_width="match_parent"
+            android:layout_height="4dp"
+            android:layout_marginStart="24dp"
+            android:layout_marginEnd="24dp"
+            android:layout_marginBottom="24dp"
+            android:background="#CCFFEB3B"
+            app:layout_constraintBottom_toBottomOf="parent" />
+
+        <View
+            android:id="@+id/roiGuideLeft"
+            android:layout_width="4dp"
             android:layout_height="match_parent"
-            android:layout_margin="24dp"
-            android:background="#4DFFEB3B"
-            app:layout_constraintTop_toTopOf="parent"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintStart_toStartOf="parent"
+            android:layout_marginStart="24dp"
+            android:layout_marginTop="24dp"
+            android:layout_marginBottom="24dp"
+            android:background="#CCFFEB3B"
+            app:layout_constraintStart_toStartOf="parent" />
+
+        <View
+            android:id="@+id/roiGuideRight"
+            android:layout_width="4dp"
+            android:layout_height="match_parent"
+            android:layout_marginEnd="24dp"
+            android:layout_marginTop="24dp"
+            android:layout_marginBottom="24dp"
+            android:background="#CCFFEB3B"
             app:layout_constraintEnd_toEndOf="parent" />
 
         <ProgressBar
@@ -110,29 +141,18 @@
             android:visibility="gone"
             app:layout_constraintTop_toTopOf="parent" />
 
-        <androidx.cardview.widget.CardView
+        <!-- 优化：移除大黑方块，改为底部半透明悬浮条显示数据 -->
+        <TextView
+            android:id="@+id/tvDataPreview"
             android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_margin="12dp"
-            app:cardCornerRadius="8dp"
-            app:cardBackgroundColor="#E6000000"
-            app:layout_constraintTop_toTopOf="parent"
-            app:layout_constraintBottom_toBottomOf="parent">
-
-            <ScrollView
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:padding="12dp">
-                <TextView
-                    android:id="@+id/tvDataPreview"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="待采集..."
-                    android:textSize="16sp"
-                    android:fontFamily="monospace"
-                    android:textColor="#FFFFFF" />
-            </ScrollView>
-        </androidx.cardview.widget.CardView>
+            android:layout_height="wrap_content"
+            android:background="#A6000000"
+            android:padding="12dp"
+            android:text="待采集..."
+            android:textSize="14sp"
+            android:fontFamily="monospace"
+            android:textColor="#FFFFFF"
+            app:layout_constraintBottom_toBottomOf="parent" />
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 
