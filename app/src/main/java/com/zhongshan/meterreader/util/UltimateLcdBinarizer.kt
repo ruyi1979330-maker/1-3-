@@ -1,274 +1,153 @@
-// 文件名: UltimateLcdBinarizer.kt
-package com.zhongshan.meterreader.util
-
-import android.graphics.Bitmap
-import android.graphics.Rect
-import androidx.camera.core.ImageProxy
-import com.google.mlkit.vision.common.InputImage
-import com.zhongshan.meterreader.DebugLogger
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import java.io.File
-import java.io.FileOutputStream
-import java.nio.ByteBuffer
-import java.util.Arrays
-
-data class BinarizedImageResult(
-    val inputImage: InputImage,
-    val roiYRanges: List<Pair<Int, Int>>
-)
-
-object UltimateLcdBinarizer {
-
-    suspend fun process(
-        imageProxy: ImageProxy,
-        rois: List<Rect>,
-        resourcePool: BinarizeResourcePool,
-        contrastOffset: Int = 15
-    ): BinarizedImageResult? = withContext(Dispatchers.IO) {
-        try {
-            if (rois.isEmpty()) return@withContext null
-
-            val yPlane = imageProxy.planes[0]
-            val yBuffer = yPlane.buffer
-            val width = imageProxy.width
-            val height = imageProxy.height
-            val rowStride = yPlane.rowStride
-            val pixelStride = yPlane.pixelStride
-
-            val ySize = yBuffer.remaining()
-            val yArray = resourcePool.acquireYuvBuffer(ySize)
-            yBuffer.get(yArray, 0, ySize)
-
-            var totalHeight = 0
-            var maxWidth = 0
-            for (roi in rois) {
-                val cropW = roi.width().coerceAtLeast(0)
-                val cropH = roi.height().coerceAtLeast(0)
-                if (cropW > maxWidth) maxWidth = cropW
-                totalHeight += cropH + 4
-            }
-
-            if (maxWidth == 0 || totalHeight == 0) return@withContext null
-
-            val canvasSize = maxWidth * totalHeight * 4
-            val canvasArray = resourcePool.acquireCanvasBuffer(canvasSize)
-            Arrays.fill(canvasArray, 0, canvasSize, 255.toByte())
-
-            val roiYRanges = mutableListOf<Pair<Int, Int>>()
-            var currentYOffset = 0
-
-            for (roi in rois) {
-                val startX = roi.left.coerceIn(0, width - 1)
-                val startY = roi.top.coerceIn(0, height - 1)
-                val endX = roi.right.coerceIn(0, width)
-                val endY = roi.bottom.coerceIn(0, height)
-                val boxWidth = endX - startX
-                val boxHeight = endY - startY
-                if (boxWidth <= 0 || boxHeight <= 0) { roiYRanges.add(Pair(-1, -1)); continue }
-
-                roiYRanges.add(Pair(currentYOffset, currentYOffset + boxHeight))
-
-                for (y in 0 until boxHeight) {
-                    val imgY = startY + y
-                    for (x in 0 until boxWidth) {
-                        val imgX = startX + x
-                        var sum = 0; var count = 0
-                        for (dy in -1..1) {
-                            for (dx in -1..1) {
-                                val ny = (imgY + dy).coerceIn(0, height - 1)
-                                val nx = (imgX + dx).coerceIn(0, width - 1)
-                                val pixelIndex = ny * rowStride + nx * pixelStride
-                                if (pixelIndex in 0 until ySize) { sum += yArray[pixelIndex].toInt() and 0xFF; count++ }
-                            }
-                        }
-                        val avg = if (count > 0) sum / count else 128
-                        val threshold = avg - contrastOffset
-                        val centerPixelIndex = imgY * rowStride + imgX * pixelStride
-                        val centerPixelValue = if (centerPixelIndex in 0 until ySize) yArray[centerPixelIndex].toInt() and 0xFF else 255
-                        val canvasIndex = ((currentYOffset + y) * maxWidth + x) * 4
-                        if (canvasIndex in 0 until canvasSize - 3) {
-                            if (centerPixelValue < threshold) {
-                                canvasArray[canvasIndex] = 0; canvasArray[canvasIndex+1] = 0; canvasArray[canvasIndex+2] = 0; canvasArray[canvasIndex+3] = 255.toByte()
-                            } else {
-                                canvasArray[canvasIndex] = 255.toByte(); canvasArray[canvasIndex+1] = 255.toByte(); canvasArray[canvasIndex+2] = 255.toByte(); canvasArray[canvasIndex+3] = 255.toByte()
-                            }
-                        }
-                    }
-                }
-                currentYOffset += boxHeight + 4
-            }
-
-            val bitmap = resourcePool.acquireBitmap(maxWidth, totalHeight)
-            val byteBuffer = ByteBuffer.wrap(canvasArray, 0, canvasSize)
-            bitmap.copyPixelsFromBuffer(byteBuffer)
-
-            return@withContext BinarizedImageResult(InputImage.fromBitmap(bitmap, imageProxy.imageInfo.rotationDegrees), roiYRanges)
-        } finally {
-            imageProxy.close()
-        }
-    }
-
-    suspend fun processBitmap(
-        bitmap: Bitmap,
-        rois: List<Rect>,
-        resourcePool: BinarizeResourcePool,
-        contrastOffset: Int = 40
-    ): BinarizedImageResult? = withContext(Dispatchers.IO) {
-        try {
-            if (rois.isEmpty()) return@withContext null
-
-            val width = bitmap.width; val height = bitmap.height
-
-            var totalHeight = 0; var maxWidth = 0
-            for (roi in rois) {
-                val cropW = roi.width().coerceAtLeast(0); val cropH = roi.height().coerceAtLeast(0)
-                if (cropW > maxWidth) maxWidth = cropW
-                totalHeight += cropH + 4
-            }
-
-            if (maxWidth == 0 || totalHeight == 0) return@withContext null
-
-            val canvasSize = maxWidth * totalHeight * 4
-            val canvasArray = resourcePool.acquireCanvasBuffer(canvasSize)
-            Arrays.fill(canvasArray, 0, canvasSize, 255.toByte())
-
-            val roiYRanges = mutableListOf<Pair<Int, Int>>()
-            var currentYOffset = 0
-
-            for (roiIndex in rois.indices) {
-                val roi = rois[roiIndex]
-                val startX = roi.left.coerceIn(0, width - 1); val startY = roi.top.coerceIn(0, height - 1)
-                val endX = roi.right.coerceIn(0, width); val endY = roi.bottom.coerceIn(0, height)
-                val boxWidth = endX - startX; val boxHeight = endY - startY
-                if (boxWidth <= 0 || boxHeight <= 0) {
-                    roiYRanges.add(Pair(-1, -1))
-                    continue
-                }
-
-                roiYRanges.add(Pair(currentYOffset, currentYOffset + boxHeight))
-
-                val roiPixels = IntArray(boxWidth * boxHeight)
-                bitmap.getPixels(roiPixels, 0, boxWidth, startX, startY, boxWidth, boxHeight)
-
-                var totalGray = 0L
-                for (pixel in roiPixels) {
-                    val r = (pixel shr 16) and 0xFF; val g = (pixel shr 8) and 0xFF; val b = pixel and 0xFF
-                    totalGray += (0.299 * r + 0.587 * g + 0.114 * b).toInt()
-                }
-                val avgGray = (totalGray / roiPixels.size).toInt()
-                var threshold = avgGray - contrastOffset
-                var blackCount = 0
-                for (pixel in roiPixels) {
-                    val r = (pixel shr 16) and 0xFF; val g = (pixel shr 8) and 0xFF; val b = pixel and 0xFF
-                    val gray = (0.299 * r + 0.587 * g + 0.114 * b).toInt()
-                    if (gray < threshold) blackCount++
-                }
-                var blackPercent = (blackCount * 100f) / roiPixels.size
-
-                var attempts = 0
-                while (attempts < 10) {
-                    if (blackPercent < 5f) {
-                        threshold = avgGray - (contrastOffset - (attempts + 1) * 5)
-                    } else if (blackPercent > 35f) {
-                        threshold = avgGray - (contrastOffset + (attempts + 1) * 5)
-                    } else {
-                        break
-                    }
-                    threshold = threshold.coerceIn(0, 255)
-                    if (threshold <= 0 || threshold >= 255) break
-
-                    blackCount = 0
-                    for (pixel in roiPixels) {
-                        val r = (pixel shr 16) and 0xFF; val g = (pixel shr 8) and 0xFF; val b = pixel and 0xFF
-                        val gray = (0.299 * r + 0.587 * g + 0.114 * b).toInt()
-                        if (gray < threshold) blackCount++
-                    }
-                    blackPercent = (blackCount * 100f) / roiPixels.size
-                    attempts++
-                }
-
-                for (y in 0 until boxHeight) {
-                    for (x in 0 until boxWidth) {
-                        val pixel = roiPixels[y * boxWidth + x]
-                        val r = (pixel shr 16) and 0xFF; val g = (pixel shr 8) and 0xFF; val b = pixel and 0xFF
-                        val gray = (0.299 * r + 0.587 * g + 0.114 * b).toInt()
-                        val canvasIndex = ((currentYOffset + y) * maxWidth + x) * 4
-                        if (canvasIndex in 0 until canvasSize - 3) {
-                            if (gray < threshold) {
-                                canvasArray[canvasIndex] = 0; canvasArray[canvasIndex+1] = 0; canvasArray[canvasIndex+2] = 0; canvasArray[canvasIndex+3] = 255.toByte()
-                            } else {
-                                canvasArray[canvasIndex] = 255.toByte(); canvasArray[canvasIndex+1] = 255.toByte(); canvasArray[canvasIndex+2] = 255.toByte(); canvasArray[canvasIndex+3] = 255.toByte()
-                            }
-                        }
-                    }
-                }
-                currentYOffset += boxHeight + 4
-            }
-
-            val outBitmap = resourcePool.acquireBitmap(maxWidth, totalHeight)
-            val byteBuffer = ByteBuffer.wrap(canvasArray, 0, canvasSize)
-            outBitmap.copyPixelsFromBuffer(byteBuffer)
-
-            try {
-                val debugDir = File("/sdcard/Download/ocr_debug")
-                if (!debugDir.exists()) debugDir.mkdirs()
-                val debugFile = File(debugDir, "spritesheet_${System.currentTimeMillis()}.png")
-                FileOutputStream(debugFile).use { fos -> outBitmap.compress(Bitmap.CompressFormat.PNG, 100, fos) }
-            } catch (_: Exception) {}
-
-            return@withContext BinarizedImageResult(InputImage.fromBitmap(outBitmap, 0), roiYRanges)
-        } finally {
-            // 资源由资源池管理
-        }
-    }
-
-    suspend fun processFullScreen(
-        bitmap: Bitmap,
-        resourcePool: BinarizeResourcePool
-    ): InputImage? = withContext(Dispatchers.IO) {
-        try {
-            val width = bitmap.width; val height = bitmap.height
-            val pixels = IntArray(width * height)
-            bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
-
-            var totalGray = 0L
-            for (pixel in pixels) {
-                val r = (pixel shr 16) and 0xFF; val g = (pixel shr 8) and 0xFF; val b = pixel and 0xFF
-                totalGray += (0.299 * r + 0.587 * g + 0.114 * b).toInt()
-            }
-            val avgGray = (totalGray / pixels.size).toInt()
-            val threshold = (avgGray - 30).coerceIn(50, 200)
-
-            val canvasSize = width * height * 4
-            val canvasArray = resourcePool.acquireCanvasBuffer(canvasSize)
-            for (i in pixels.indices) {
-                val pixel = pixels[i]
-                val r = (pixel shr 16) and 0xFF; val g = (pixel shr 8) and 0xFF; val b = pixel and 0xFF
-                val gray = (0.299 * r + 0.587 * g + 0.114 * b).toInt()
-                val outIdx = i * 4
-                if (gray < threshold) {
-                    canvasArray[outIdx] = 0; canvasArray[outIdx+1] = 0; canvasArray[outIdx+2] = 0; canvasArray[outIdx+3] = 255.toByte()
-                } else {
-                    canvasArray[outIdx] = 255.toByte(); canvasArray[outIdx+1] = 255.toByte(); canvasArray[outIdx+2] = 255.toByte(); canvasArray[outIdx+3] = 255.toByte()
-                }
-            }
-
-            val outBitmap = resourcePool.acquireBitmap(width, height)
-            val byteBuffer = ByteBuffer.wrap(canvasArray, 0, canvasSize)
-            outBitmap.copyPixelsFromBuffer(byteBuffer)
-
-            try {
-                val debugDir = File("/sdcard/Download/ocr_debug")
-                if (!debugDir.exists()) debugDir.mkdirs()
-                val debugFile = File(debugDir, "fullscreen_${System.currentTimeMillis()}.png")
-                FileOutputStream(debugFile).use { fos -> outBitmap.compress(Bitmap.CompressFormat.PNG, 100, fos) }
-                DebugLogger.log("Binarizer", "全屏二值化已保存: ${debugFile.absolutePath}")
-            } catch (_: Exception) {}
-
-            return@withContext InputImage.fromBitmap(outBitmap, 0)
-        } finally {
-            // 资源由资源池管理
-        }
-    }
-}
+	// 文件名: UltimateLcdBinarizer.kt
+	package com.zhongshan.meterreader.util
+	import android.graphics.Bitmap
+	import android.graphics.Rect
+	import androidx.camera.core.ImageProxy
+	import com.google.mlkit.vision.common.InputImage
+	import java.nio.ByteBuffer
+	object UltimateLcdBinarizer {
+	    data class BinarizeResult(
+	        val inputImage: InputImage,
+	        val roiYRanges: List<Pair<Int, Int>>
+	    )
+	    /**
+	     * 阶段二：极限图像预处理引擎 (处理相机流 ImageProxy)
+	     * Sprite Sheet 空间组装法，专为点阵屏优化，零 GC 内存分配。
+	     */
+	    fun processImageProxy(
+	        imageProxy: ImageProxy,
+	        rois: List<Rect>,
+	        resourcePool: BinarizeResourcePool
+	    ): BinarizeResult? {
+	        val yPlane = imageProxy.planes[0]
+	        val yRowStride = yPlane.rowStride
+	        val yBuffer = yPlane.buffer
+	        val imgWidth = imageProxy.width
+	        val imgHeight = imageProxy.height
+	        // 1. 一次性 Bulk Copy 到堆内存
+	        val ySize = yBuffer.remaining()
+	        val yArray = resourcePool.acquireYBuffer(ySize)
+	        yBuffer.get(yArray, 0, ySize)
+	        // 2. 计算拼接画布尺寸
+	        var totalHeight = 0
+	        var maxWidth = 0
+	        for (rect in rois) {
+	            val w = rect.width()
+	            val h = rect.height()
+	            if (w > maxWidth) maxWidth = w
+	            totalHeight += h + 4 // 中间留 4px 间隔
+	        }
+	        if (totalHeight == 0 || maxWidth == 0) return null
+	        val canvasWidth = maxWidth
+	        val canvasHeight = totalHeight
+	        val canvasSize = canvasWidth * canvasHeight
+	        val canvasArray = resourcePool.acquireCanvasBuffer(canvasSize)
+	        // ALPHA_8: 0 为透明, 255 为不透明黑
+	        java.util.Arrays.fill(canvasArray, 0, canvasSize, 0.toByte())
+	        val roiYRanges = mutableListOf<Pair<Int, Int>>()
+	        var currentY = 0
+	        // 3. 遍历 ROI 进行局部动态阈值计算与紧凑拼接
+	        for (rect in rois) {
+	            val roiW = rect.width()
+	            val roiH = rect.height()
+	            val startY = currentY
+	            // 3x3 采样局部动态阈值计算
+	            val blockW = roiW / 3
+	            val blockH = roiH / 3
+	            if (blockW == 0 || blockH == 0) continue
+	            val thresholds = Array(3) { IntArray(3) }
+	            for (by in 0 until 3) {
+	                for (bx in 0 until 3) {
+	                    var sum = 0
+	                    var count = 0
+	                    val startCol = rect.left + bx * blockW
+	                    val startRow = rect.top + by * blockH
+	                    val endCol = if (bx == 2) rect.right else startCol + blockW
+	                    val endRow = if (by == 2) rect.bottom else startRow + blockH
+	                    for (y in startRow until endRow) {
+	                        for (x in startCol until endCol) {
+	                            if (x < imgWidth && y < imgHeight) {
+	                                sum += (yArray[y * yRowStride + x].toInt() and 0xFF)
+	                                count++
+	                            }
+	                        }
+	                    }
+	                    thresholds[by][bx] = if (count > 0) sum / count else 128
+	                }
+	            }
+	            // 像素拷贝至画布 (白底黑字: 像素 < 阈值 为黑字 255)
+	            for (y in 0 until roiH) {
+	                val srcY = rect.top + y
+	                if (srcY >= imgHeight) continue
+	                for (x in 0 until roiW) {
+	                    val srcX = rect.left + x
+	                    if (srcX >= imgWidth) continue
+	                    val pixelVal = yArray[srcY * yRowStride + srcX].toInt() and 0xFF
+	                    val bx = if (x < blockW) 0 else if (x < blockW * 2) 1 else 2
+	                    val by = if (y < blockH) 0 else if (y < blockH * 2) 1 else 2
+	                    val threshold = thresholds[by][bx]
+	                    canvasArray[startY * canvasWidth + x] = if (pixelVal < threshold) 255.toByte() else 0.toByte()
+	                }
+	            }
+	            roiYRanges.add(Pair(startY, startY + roiH))
+	            currentY += roiH + 4
+	        }
+	        // 4. 从对象池获取 Bitmap 并灌入数据
+	        val bitmap = resourcePool.acquireBitmap(canvasWidth, canvasHeight)
+	        bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(canvasArray, 0, canvasSize))
+	        return BinarizeResult(InputImage.fromBitmap(bitmap, 0), roiYRanges)
+	    }
+	    /**
+	     * 兼容相册模式的 Bitmap 处理逻辑
+	     */
+	    fun processBitmap(
+	        bitmap: Bitmap,
+	        rois: List<Rect>,
+	        resourcePool: BinarizeResourcePool
+	    ): BinarizeResult? {
+	        val imgWidth = bitmap.width
+	        val imgHeight = bitmap.height
+	        val pixels = IntArray(imgWidth * imgHeight)
+	        bitmap.getPixels(pixels, 0, imgWidth, 0, 0, imgWidth, imgHeight)
+	        var totalHeight = 0
+	        var maxWidth = 0
+	        for (rect in rois) {
+	            val w = rect.width()
+	            val h = rect.height()
+	            if (w > maxWidth) maxWidth = w
+	            totalHeight += h + 4
+	        }
+	        if (totalHeight == 0 || maxWidth == 0) return null
+	        val canvasWidth = maxWidth
+	        val canvasHeight = totalHeight
+	        val canvasSize = canvasWidth * canvasHeight
+	        val canvasArray = resourcePool.acquireCanvasBuffer(canvasSize)
+	        java.util.Arrays.fill(canvasArray, 0, canvasSize, 0.toByte())
+	        val roiYRanges = mutableListOf<Pair<Int, Int>>()
+	        var currentY = 0
+	        for (rect in rois) {
+	            val roiW = rect.width()
+	            val roiH = rect.height()
+	            val startY = currentY
+	            for (y in 0 until roiH) {
+	                val srcY = rect.top + y
+	                if (srcY >= imgHeight) continue
+	                for (x in 0 until roiW) {
+	                    val srcX = rect.left + x
+	                    if (srcX >= imgWidth) continue
+	                    val pixel = pixels[srcY * imgWidth + srcX]
+	                    val r = (pixel shr 16) and 0xFF
+	                    val g = (pixel shr 8) and 0xFF
+	                    val b = pixel and 0xFF
+	                    val gray = (r + g + b) / 3
+	                    canvasArray[startY * canvasWidth + x] = if (gray < 128) 255.toByte() else 0.toByte()
+	                }
+	            }
+	            roiYRanges.add(Pair(startY, startY + roiH))
+	            currentY += roiH + 4
+	        }
+	        val resultBitmap = resourcePool.acquireBitmap(canvasWidth, canvasHeight)
+	        resultBitmap.copyPixelsFromBuffer(ByteBuffer.wrap(canvasArray, 0, canvasSize))
+	        return BinarizeResult(InputImage.fromBitmap(resultBitmap, 0), roiYRanges)
+	    }
+	}
