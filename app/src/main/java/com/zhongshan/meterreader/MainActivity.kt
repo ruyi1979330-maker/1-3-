@@ -73,19 +73,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 💡 核心修复点：将相册选出的原图送入 UCrop，而不是直接丢给 OCR
     private val galleryPickLauncher = registerForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
         if (uri != null && !isProcessing) {
-            val destinationUri = Uri.fromFile(File(cacheDir, "crop_${System.currentTimeMillis()}.jpg"))
-            val uCropIntent = UCrop.of(uri, destinationUri)
-                .withOptions(UCrop.Options().apply {
-                    setFreeStyleCropEnabled(true) // 允许自由框选纯屏幕区域
-                    setToolbarTitle("请裁剪至机组屏幕纯净区域")
-                })
-                .getIntent(this)
-            uCropLauncher.launch(uCropIntent)
+            lifecycleScope.launch {
+                setProcessing(true)
+                processImageSuspend(uri, ImageSource.GALLERY)
+                setProcessing(false)
+            }
         }
     }
 
@@ -97,7 +93,6 @@ class MainActivity : AppCompatActivity() {
             if (resultUri != null) {
                 lifecycleScope.launch {
                     setProcessing(true)
-                    // 裁剪完成后，再以 GALLERY 的身份传给引擎应用 relativeConfigs
                     processImageSuspend(resultUri, ImageSource.GALLERY)
                     setProcessing(false)
                 }
