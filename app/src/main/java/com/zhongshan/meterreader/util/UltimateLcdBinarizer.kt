@@ -6,7 +6,6 @@ import android.graphics.Rect
 import androidx.camera.core.ImageProxy
 import com.google.mlkit.vision.common.InputImage
 import com.zhongshan.meterreader.DebugLogger
-import java.nio.ByteBuffer
 
 object UltimateLcdBinarizer {
 
@@ -42,28 +41,23 @@ object UltimateLcdBinarizer {
             if (w > maxWidth) maxWidth = w
             totalHeight += h + 4
         }
-        if (totalHeight == 0 || maxWidth == 0) {
-            DebugLogger.log("Binarizer-Debug", "画布尺寸为 0，跳过")
-            return null
-        }
+        if (totalHeight == 0 || maxWidth == 0) return null
 
         val canvasWidth = maxWidth
         val canvasHeight = totalHeight
         val canvasSize = canvasWidth * canvasHeight
         val canvasArray = resourcePool.acquireCanvasBuffer(canvasSize)
-        java.util.Arrays.fill(canvasArray, 0, canvasSize, 0.toByte())
+        
+        // 修改：初始化为白色背景 (0xFFFFFFFF)
+        java.util.Arrays.fill(canvasArray, 0, canvasSize, -1)
 
         val roiYRanges = mutableListOf<Pair<Int, Int>>()
         var currentY = 0
-
-        DebugLogger.log("Binarizer-Debug", "开始处理图像: ${imgWidth}x${imgHeight}, 画布: ${canvasWidth}x${canvasHeight}, ROI数: ${rois.size}")
 
         for ((index, rect) in rois.withIndex()) {
             val roiW = rect.width()
             val roiH = rect.height()
             val startY = currentY
-
-            DebugLogger.log("Binarizer-Debug", "处理 ROI $index: 坐标=${rect.toShortString()}, 尺寸=${roiW}x${roiH}")
 
             val blockW = roiW / 3
             val blockH = roiH / 3
@@ -102,7 +96,8 @@ object UltimateLcdBinarizer {
                     val by = if (y < blockH) 0 else if (y < blockH * 2) 1 else 2
                     val threshold = thresholds[by][bx]
                     
-                    canvasArray[startY * canvasWidth + x] = if (pixelVal < threshold) 255.toByte() else 0.toByte()
+                    // 修改：黑字 0xFF000000 (-16777216), 白底 0xFFFFFFFF (-1)
+                    canvasArray[startY * canvasWidth + x] = if (pixelVal < threshold) -16777216 else -1
                 }
             }
             roiYRanges.add(Pair(startY, startY + roiH))
@@ -110,7 +105,7 @@ object UltimateLcdBinarizer {
         }
 
         val bitmap = resourcePool.acquireBitmap(canvasWidth, canvasHeight)
-        bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(canvasArray, 0, canvasSize))
+        bitmap.setPixels(canvasArray, 0, canvasWidth, 0, 0, canvasWidth, canvasHeight)
 
         return BinarizeResult(InputImage.fromBitmap(bitmap, 0), roiYRanges)
     }
@@ -143,7 +138,7 @@ object UltimateLcdBinarizer {
         val canvasHeight = totalHeight
         val canvasSize = canvasWidth * canvasHeight
         val canvasArray = resourcePool.acquireCanvasBuffer(canvasSize)
-        java.util.Arrays.fill(canvasArray, 0, canvasSize, 0.toByte())
+        java.util.Arrays.fill(canvasArray, 0, canvasSize, -1)
 
         val roiYRanges = mutableListOf<Pair<Int, Int>>()
         var currentY = 0
@@ -166,7 +161,7 @@ object UltimateLcdBinarizer {
                     val b = pixel and 0xFF
                     val gray = (r + g + b) / 3
                     
-                    canvasArray[startY * canvasWidth + x] = if (gray < 128) 255.toByte() else 0.toByte()
+                    canvasArray[startY * canvasWidth + x] = if (gray < 128) -16777216 else -1
                 }
             }
             roiYRanges.add(Pair(startY, startY + roiH))
@@ -174,7 +169,7 @@ object UltimateLcdBinarizer {
         }
 
         val resultBitmap = resourcePool.acquireBitmap(canvasWidth, canvasHeight)
-        resultBitmap.copyPixelsFromBuffer(ByteBuffer.wrap(canvasArray, 0, canvasSize))
+        resultBitmap.setPixels(canvasArray, 0, canvasWidth, 0, 0, canvasWidth, canvasHeight)
 
         return BinarizeResult(InputImage.fromBitmap(resultBitmap, 0), roiYRanges)
     }
