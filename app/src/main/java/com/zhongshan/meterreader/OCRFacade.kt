@@ -5,14 +5,14 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.net.Uri
-import android.util.Log
-import com.google.mlkit.vision.common.InputImage
+import android.widget.Toast
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.zhongshan.meterreader.data.DeviceTemplate
 import com.zhongshan.meterreader.util.BinarizeResourcePool
 import com.zhongshan.meterreader.util.OCREngine
 import com.zhongshan.meterreader.util.StorageAndImageUtils
+import com.zhongshan.meterreader.util.UltimateLcdBinarizer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
@@ -21,175 +21,116 @@ enum class ImageSource { CAMERA, GALLERY }
 
 object OCRFacade {
 
-    // 目标标准尺寸 (仅针对相机原图进行归一化)
+    // 目标标准尺寸
     private const val TARGET_WIDTH = 3000
     private const val TARGET_HEIGHT = 4000
+
+    // 基于标准尺寸(3000×4000)精确标定的ROI像素坐标
+    // 蒸发器屏：数字在屏幕右侧，从上到下4行
+    private val evaporatorRois = listOf(
+        Rect(1860, 920, 2850, 1320) to "field_1_01|蒸发器进口水温",   // 10.0
+        Rect(1860, 1400, 2850, 1800) to "field_1_02|蒸发器出口水温",   // 7.6
+        Rect(1860, 1880, 2850, 2280) to "field_1_06|蒸发器蒸发温度",   // 5.7
+        Rect(1740, 2360, 2850, 2800) to "field_1_05|蒸发器冷媒压力"    // 256.1
+    )
+
+    // 冷凝器屏：同上
+    private val condenserRois = listOf(
+        Rect(1860, 920, 2850, 1320) to "field_1_08|冷凝器进口水温",    // 28.7
+        Rect(1860, 1400, 2850, 1800) to "field_1_09|冷凝器出口水温",    // 30.8
+        Rect(1860, 1880, 2850, 2280) to "field_1_13|冷凝器冷凝温度",    // 31.6
+        Rect(1740, 2360, 2850, 2800) to "field_1_12|冷凝器冷媒压力"     // 707.5
+    )
+
+    // 压缩机和电流屏
+    private val compressorRois = listOf(
+        Rect(150, 920, 1200, 1400) to "field_1_14|压缩机油压",         // 656.3 屏幕左侧
+        Rect(1740, 1880, 2850, 2280) to "field_1_15|压缩机排出口温度",  // 48.3
+        Rect(1050, 2520, 2100, 3040) to "field_1_18|主机负载",          // 50.5
+        Rect(1050, 3120, 2160, 3640) to "field_1_17|电机电流"           // 232.0
+    )
+
+    private fun getRoisForScreen(screenIndex: Int): List<Pair<Rect, String>> {
+        return when (screenIndex) {
+            0 -> evaporatorRois
+            1 -> condenserRois
+            2 -> compressorRois
+            else -> emptyList()
+        }
+    }
+
+    private fun shiftFieldId(fieldId: String, offset: Int): String {
+        val parts = fieldId.split("|")
+        val rawId = parts[0]
+        val label = if (parts.size > 1) parts[1] else ""
+        val idParts = rawId.split("_")
+        if (idParts.size == 3) {
+            val num = idParts[2].toIntOrNull()
+            if (num != null) {
+                val newId = "${idParts[0]}_${idParts[1]}_${(num + offset).toString().padStart(2, '0')}"
+                return if (label.isNotEmpty()) "$newId|$label" else newId
+            }
+        }
+        return fieldId
+    }
 
     suspend fun performSmartOcr(
         context: Context,
         imageUri: Uri,
         template: DeviceTemplate,
         screenIndex: Int,
-        imageSource: ImageSource,
-        binarizePool: BinarizeResourcePool
+        source: ImageSource,
+        resourcePool: BinarizeResourcePool
     ): Map<String, String> = withContext(Dispatchers.IO) {
-        
-        var originalBitmap: Bitmap? = null
-        var scaledBitmap: Bitmap? = null
-        var stitchedBitmap: Bitmap? = null
-        
+        val bitmap = StorageAndImageUtils.loadAndFixExifMatrixSecurely(context, imageUri)
+        if (bitmap == null) {
+            withContext(Dispatchers.Main) { Toast.makeText(context, "图片加载失败", Toast.LENGTH_LONG).show() }
+            return@withContext emptyMap()
+        }
         try {
-            DebugLogger.log("OCR-Facade", "===== 开始处理图片 =====")
-            DebugLogger.log("OCR-Facade", "来源: $imageSource, 屏幕索引: $screenIndex")
-            
-            // 修复点：使用项目中真实存在且安全的图片加载方法
-            originalBitmap = StorageAndImageUtils.loadAndFixExifMatrixSecurely(context, imageUri)
-            if (originalBitmap == null) {
-                DebugLogger.log("OCR-Facade-Error", "无法加载图片 Uri: $imageUri")
-                return@withContext emptyMap()
-            }
-
-            // 修复点：恢复板交（换热器）的专属提交流程（铁律：不破坏已有稳定模块）
             if (template.isHeatExchanger) {
                 val plateKeywordMap = TemplateManager.getPlateKeywordMap(template.roomId)
-                return@withContext OCREngine.extractPlateData(originalBitmap, template.roomId == 1, plateKeywordMap)
+                return@withContext OCREngine.extractPlateData(bitmap, template.roomId == 1, plateKeywordMap)
             }
 
-            val rois = mutableListOf<Rect>()
-            val fieldMapping = mutableListOf<String>()
-            val processBitmap: Bitmap
+            // 缩放到标准尺寸
+            val scaledBitmap = Bitmap.createScaledBitmap(bitmap, TARGET_WIDTH, TARGET_HEIGHT, true)
 
-            // 铁律 3：分离坐标系处理
-            if (imageSource == ImageSource.CAMERA) {
-                // 相机原图：强制缩放到 3000x4000，应用绝对坐标
-                scaledBitmap = Bitmap.createScaledBitmap(originalBitmap, TARGET_WIDTH, TARGET_HEIGHT, true)
-                processBitmap = scaledBitmap
-                val configs = DeviceOcrStrategy.getHardcodedRois(template.machineId, screenIndex)
-                configs.forEach { config ->
-                    rois.add(Rect(
-                        (TARGET_WIDTH * config.xPercent).toInt(),
-                        (TARGET_HEIGHT * config.yPercent).toInt(),
-                        (TARGET_WIDTH * (config.xPercent + config.wPercent)).toInt(),
-                        (TARGET_HEIGHT * (config.yPercent + config.hPercent)).toInt()
-                    ))
-                    fieldMapping.add(config.fieldId)
-                }
-                DebugLogger.log("OCR-Facade", "应用相机绝对坐标(按3000x4000缩放), 生成 ROI 数量: ${rois.size}")
-            } else {
-                // 相册裁剪图：保留原始比例，应用相对坐标
-                processBitmap = originalBitmap
-                val w = processBitmap.width
-                val h = processBitmap.height
-                val configs = DeviceOcrStrategy.getRelativeRois(template.machineId, screenIndex)
-                configs.forEach { config ->
-                    rois.add(Rect(
-                        (w * config.xStartPct).toInt(),
-                        (h * config.yStartPct).toInt(),
-                        (w * config.xEndPct).toInt(),
-                        (h * config.yEndPct).toInt()
-                    ))
-                    fieldMapping.add(config.fieldId)
-                }
-                DebugLogger.log("OCR-Facade", "应用相册相对坐标(原图尺寸 ${w}x${h}), 生成 ROI 数量: ${rois.size}")
-            }
+            // 获取当前屏的ROI
+            val roisWithFields = getRoisForScreen(screenIndex)
+            val rois = roisWithFields.map { it.first }
+            val fieldMapping = roisWithFields.map { it.second }
 
-            if (rois.isEmpty()) {
-                DebugLogger.log("OCR-Facade-Error", "未获取到有效的 ROI 坐标配置")
-                return@withContext emptyMap()
-            }
+            // 二值化拼版
+            val binarizeResult = UltimateLcdBinarizer.processBitmap(scaledBitmap, rois, resourcePool)
+            scaledBitmap.recycle()
 
-            // 铁律 1 & 4：内聚进行 ARGB_8888 二值化与严密的垂直拼接，杜绝任何 Y 轴串联
-            val stitchedHeight = rois.sumOf { it.height() }
-            val maxWidth = rois.maxOfOrNull { it.width() } ?: 0
-            
-            stitchedBitmap = Bitmap.createBitmap(maxWidth, stitchedHeight, Bitmap.Config.ARGB_8888)
-            val canvasArray = IntArray(maxWidth * stitchedHeight)
-            val roiYRanges = mutableListOf<Pair<Int, Int>>()
-            
-            var currentY = 0
-            for (i in rois.indices) {
-                val roi = rois[i]
-                // 防越界保护
-                val safeLeft = roi.left.coerceAtLeast(0)
-                val safeTop = roi.top.coerceAtLeast(0)
-                val safeRight = roi.right.coerceAtMost(processBitmap.width)
-                val safeBottom = roi.bottom.coerceAtMost(processBitmap.height)
-                
-                val cropW = safeRight - safeLeft
-                val cropH = safeBottom - safeTop
-                
-                if (cropW <= 0 || cropH <= 0) {
-                    roiYRanges.add(Pair(-1, -1))
-                    continue
-                }
+            if (binarizeResult == null) return@withContext emptyMap()
 
-                val pixels = IntArray(cropW * cropH)
-                processBitmap.getPixels(pixels, 0, cropW, safeLeft, safeTop, cropW, cropH)
-                
-                // 二值化 (灰度阈值设为 120，遵循黑 0xFF000000，白 0xFFFFFFFF)
-                for (pIdx in pixels.indices) {
-                    val p = pixels[pIdx]
-                    val r = (p shr 16) and 0xFF
-                    val g = (p shr 8) and 0xFF
-                    val b = p and 0xFF
-                    val gray = (0.299 * r + 0.587 * g + 0.114 * b).toInt()
-                    pixels[pIdx] = if (gray < 120) 0xFF000000.toInt() else 0xFFFFFFFF.toInt()
-                }
-                
-                // 绘制到拼接画布
-                for (y in 0 until cropH) {
-                    for (x in 0 until cropW) {
-                        canvasArray[(currentY + y) * maxWidth + x] = pixels[y * cropW + x]
-                    }
-                    // 宽度不足最大宽度的部分，补齐白底防止噪点
-                    for (x in cropW until maxWidth) {
-                        canvasArray[(currentY + y) * maxWidth + x] = 0xFFFFFFFF.toInt()
-                    }
-                }
-                
-                // 严密记录这段内容在拼图上的确切 Y 轴起止范围
-                roiYRanges.add(Pair(currentY, currentY + cropH))
-                currentY += cropH
-            }
-
-            stitchedBitmap.setPixels(canvasArray, 0, maxWidth, 0, 0, maxWidth, stitchedHeight)
-            DebugLogger.log("OCR-Facade", "二值化拼接完成，拼图尺寸: ${maxWidth}x${stitchedHeight}")
-
-            // 投喂给 ML Kit
-            val inputImage = InputImage.fromBitmap(stitchedBitmap, 0)
             val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-            val visionResult = recognizer.process(inputImage).await()
-            
+            val visionResult = recognizer.process(binarizeResult.inputImage).await()
             val lines = visionResult.textBlocks.flatMap { block -> block.lines }
-            DebugLogger.log("OCR-Facade", "ML Kit 识别成功，共读取 ${lines.size} 行文本")
 
             val results = mutableMapOf<String, String>()
             for (line in lines) {
                 val box = line.boundingBox ?: continue
                 val centerY = box.top + box.height() / 2
                 var matchedIndex = -1
-                
-                for (i in roiYRanges.indices) {
-                    val (top, bottom) = roiYRanges[i]
+                for (i in binarizeResult.roiYRanges.indices) {
+                    val (top, bottom) = binarizeResult.roiYRanges[i]
                     if (top == -1) continue
-                    if (centerY in top..bottom) { 
-                        matchedIndex = i
-                        break 
-                    }
+                    if (centerY in top..bottom) { matchedIndex = i; break }
                 }
-                
                 if (matchedIndex in fieldMapping.indices) {
-                    // 数据清洗：容错逗号、冒号误判
                     val text = line.text.trim().replace(",", ".").replace(":", ".")
                     val match = Regex("""\d{1,4}(\.\d{1,2})?""").find(text)
                     if (match != null) {
                         results[fieldMapping[matchedIndex]] = match.value
-                        DebugLogger.log("OCR-Facade-Match", "命中字段 [${fieldMapping[matchedIndex]}] -> 值: ${match.value}")
                     }
                 }
             }
 
-            // 最终按当前屏所需字段进行结果过滤，防止带入脏数据
+            // 修正：限制结果数量为当前屏的字段数，防止多识别
             val finalResults = mutableMapOf<String, String>()
             for ((index, fieldId) in fieldMapping.withIndex()) {
                 if (fieldId in results) {
@@ -197,18 +138,10 @@ object OCRFacade {
                 }
             }
 
-            DebugLogger.log("OCR-Facade", "===== 最终提取结果 =====")
-            DebugLogger.log("OCR-Facade", finalResults.toString())
+            DebugLogger.log("OCR", "最终识别结果: $finalResults")
             return@withContext finalResults
-
-        } catch (e: Exception) {
-            DebugLogger.log("OCR-Facade-Error", "识别流程发生严重异常: ${Log.getStackTraceString(e)}")
-            e.printStackTrace()
-            return@withContext emptyMap()
         } finally {
-            originalBitmap?.recycle()
-            scaledBitmap?.recycle()
-            stitchedBitmap?.recycle()
+            bitmap.recycle()
         }
     }
 }
