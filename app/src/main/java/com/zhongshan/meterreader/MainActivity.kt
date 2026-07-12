@@ -200,6 +200,16 @@ class MainActivity : AppCompatActivity() {
                 galleryPickLauncher.launch("image/*")
             }
         }
+        binding.btnClearData.setOnClickListener {
+            lifecycleScope.launch {
+                RecognitionResultHolder.clearAll()
+                withContext(Dispatchers.Main) {
+                    binding.tvDataPreview.text = "待采集..."
+                    Toast.makeText(this@MainActivity, "已清除所有缓存数据", Toast.LENGTH_SHORT).show()
+                    updateScreenProgress()
+                }
+            }
+        }
         binding.btnRoiCalibration.visibility = View.GONE
         binding.btnRoiCalibration.isEnabled = false
         binding.btnPresetSettings.setOnClickListener {
@@ -232,6 +242,10 @@ class MainActivity : AppCompatActivity() {
                         putExtra("EXTRA_FILL_TYPE", "screw")
                     }
                     startActivity(intent)
+                    // 清除缓存
+                    RecognitionResultHolder.clearMachineData("screw_1")
+                    RecognitionResultHolder.clearMachineData("screw_2")
+                    RecognitionResultHolder.clearMachineData("screw_3")
                     return@launch
                 }
                 if (template.isHeatExchanger) {
@@ -248,6 +262,8 @@ class MainActivity : AppCompatActivity() {
                         putExtra("EXTRA_FILL_TYPE", "plate")
                     }
                     startActivity(intent)
+                    // 清除缓存
+                    RecognitionResultHolder.clearMachineData(template.machineId)
                     return@launch
                 }
             }
@@ -349,10 +365,23 @@ class MainActivity : AppCompatActivity() {
     private fun buildScrewFillData(allCachedData: Map<String, String>): JSONObject {
         val root = JSONObject()
         root.put("operator", "")
+
+        val allScrewKeys = listOf(
+            "evapInTemp", "evapOutTemp", "evapInPressure", "evapOutPressure",
+            "evapRefPressure", "evapTemp", "condInTemp", "condOutTemp",
+            "condInPressure", "condOutPressure", "condRefPressure", "condTemp",
+            "compOilPressure", "compDischargeTemp", "motorCurrent", "hostLoad"
+        )
+
         for (unitNo in 1..3) {
             val machineId = "screw_$unitNo"
             val baseNum = when (unitNo) { 1 -> 1; 2 -> 31; 3 -> 51; else -> continue }
             val unitData = mutableMapOf<String, String>()
+            // 初始化所有字段为空字符串
+            for (key in allScrewKeys) {
+                unitData[key] = ""
+            }
+
             for ((key, value) in allCachedData) {
                 val parts = key.split("|")
                 if (parts.size != 2) continue
@@ -367,28 +396,30 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
-            if (unitData.isNotEmpty()) {
-                val unitJson = JSONObject()
-                for ((k, v) in unitData) unitJson.put(k, v)
-                val presets = PresetManager.getPresetsForMachine(machineId)
-                for ((fieldIdWithLabel, value) in presets) {
-                    val parts = fieldIdWithLabel.split("|")
-                    if (parts.size != 2) continue
-                    val dataKey = labelToScrewDataKey(parts[1])
-                    if (dataKey != null) unitJson.put(dataKey, value)
-                }
-                val pumpsKey = "screw_${unitNo}_pumps"
-                val pumpsStr = PresetManager.getPresetValue(pumpsKey, "")
-                val pumpsList = pumpsStr.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-                val pumpsArray = JSONArray()
-                pumpsList.forEach { pumpsArray.put(it) }
-                unitJson.put("pumps", pumpsArray)
-                unitJson.put("remark", "")
-                when (unitNo) {
-                    1 -> root.put("unit1", unitJson)
-                    2 -> root.put("unit2", unitJson)
-                    3 -> root.put("unit3", unitJson)
-                }
+
+            val unitJson = JSONObject()
+            for ((k, v) in unitData) unitJson.put(k, v)
+
+            val presets = PresetManager.getPresetsForMachine(machineId)
+            for ((fieldIdWithLabel, value) in presets) {
+                val parts = fieldIdWithLabel.split("|")
+                if (parts.size != 2) continue
+                val dataKey = labelToScrewDataKey(parts[1])
+                if (dataKey != null) unitJson.put(dataKey, value)
+            }
+
+            val pumpsKey = "screw_${unitNo}_pumps"
+            val pumpsStr = PresetManager.getPresetValue(pumpsKey, "")
+            val pumpsList = pumpsStr.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            val pumpsArray = JSONArray()
+            pumpsList.forEach { pumpsArray.put(it) }
+            unitJson.put("pumps", pumpsArray)
+            unitJson.put("remark", "")
+
+            when (unitNo) {
+                1 -> root.put("unit1", unitJson)
+                2 -> root.put("unit2", unitJson)
+                3 -> root.put("unit3", unitJson)
             }
         }
         return root
@@ -420,8 +451,16 @@ class MainActivity : AppCompatActivity() {
         val root = JSONObject()
         val groupsArray = JSONArray()
         val groupDefs = plateGroupDefs[machineId] ?: return root
+
+        val allPlateKeys = listOf("inTemp", "outTemp", "inPressure", "outPressure", "steamPressure", "pumpCurrent", "remark")
+
         for ((groupTitle, prefix) in groupDefs) {
             val fields = JSONObject()
+            // 初始化所有字段为空字符串
+            for (key in allPlateKeys) {
+                fields.put(key, "")
+            }
+
             for ((key, value) in cachedData) {
                 if (!key.startsWith("$prefix|")) continue
                 val label = key.substringAfter("|")
@@ -435,14 +474,13 @@ class MainActivity : AppCompatActivity() {
                     label.contains("备注") -> "remark"
                     else -> continue
                 }
-                if (fieldKey == "remark") fields.put("remark", value) else fields.put(fieldKey, value)
+                fields.put(fieldKey, value)
             }
-            if (fields.length() > 0) {
-                val groupObj = JSONObject()
-                groupObj.put("groupTitle", groupTitle)
-                groupObj.put("fields", fields)
-                groupsArray.put(groupObj)
-            }
+
+            val groupObj = JSONObject()
+            groupObj.put("groupTitle", groupTitle)
+            groupObj.put("fields", fields)
+            groupsArray.put(groupObj)
         }
         root.put("plateGroups", groupsArray)
         return root
@@ -451,6 +489,7 @@ class MainActivity : AppCompatActivity() {
     private fun setProcessing(processing: Boolean) {
         isProcessing = processing
         binding.btnGallery.isEnabled = !processing
+        binding.btnClearData.isEnabled = !processing
         binding.btnTransferAndFill.isEnabled = !processing
         binding.btnPresetSettings.isEnabled = !processing
         binding.progressBar.visibility = if (processing) View.VISIBLE else View.GONE
