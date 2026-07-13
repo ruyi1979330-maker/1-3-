@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class WebViewActivity : AppCompatActivity() {
 companion object {
-private const val WEB_LOAD_TIMEOUT_MS = 60_000L // 修复P4：增加超时阈值至60秒，弱网下给更多时间
+private const val WEB_LOAD_TIMEOUT_MS = 60_000L
 private const val AUTO_SCAN_INTERVAL_MS = 1500L
 private const val MAX_IDLE_SCAN_COUNT = 3
 }
@@ -386,7 +386,8 @@ private fun compileFillJs(
                         var pumpStatus = checkPump(pumpItems[k]);
                         if (pumpStatus === 1) {
                             filledCount++;
-                            break; // 修复P2：每次扫描只点击一个未操作的泵，防止连续同步点击导致前端框架事件丢失
+                            window.__ocrIdleCount = 0; // 修复：只要有泵被点击，就重置空闲计数，确保所有泵都能被点击完
+                            break; // 每次扫描只点击一个未操作的泵，防止连续同步点击导致前端框架事件丢失
                         }
                     }
                 }
