@@ -37,37 +37,35 @@ object OCRFacade {
         screenIndex: Int,
         resourcePool: BinarizeResourcePool
     ): Map<String, String> = withContext(Dispatchers.IO) {
-        // 局部持有本次会产生的所有中间 Bitmap，统一回收
-        var rawBitmap: Bitmap? = null
-        var rotatedBitmap: Bitmap? = null
-        var finalBitmap: Bitmap? = null
+        // 修复 Q1：用 val 级联 + intermediates 列表统一回收，避免 var 被 lambda 捕获导致的
+        //         smart-cast 失败与所有权混乱，保证任何异常都不会 OOM 闪退。
+        // 注意：本方法绝不 close imageProxy（交由 MainActivity 的 finally 处理），避免重复 close。
+        val intermediates = ArrayList<Bitmap>()
 
         try {
-            // 1) ImageProxy -> Bitmap（这里不 close imageProxy，交给调用方）
-            rawBitmap = try {
+            // 1) ImageProxy -> Bitmap
+            val rawBitmap: Bitmap = try {
                 imageProxy.toBitmap()
             } catch (e: Throwable) {
                 DebugLogger.log("StreamOCR", "toBitmap 失败: ${e.javaClass.simpleName} ${e.message}")
                 return@withContext emptyMap()
-            }
-            if (rawBitmap == null || rawBitmap.width <= 0 || rawBitmap.height <= 0) {
+            } ?: return@withContext emptyMap()
+
+            if (rawBitmap.width <= 0 || rawBitmap.height <= 0) {
                 DebugLogger.log("StreamOCR", "toBitmap 得到无效 Bitmap，跳过")
                 return@withContext emptyMap()
             }
+            intermediates.add(rawBitmap)
+            val rawW = rawBitmap.width
+            val rawH = rawBitmap.height
 
             // 2) 旋转
             val rotation = try { imageProxy.imageInfo.rotationDegrees } catch (e: Throwable) { 0 }
-            rotatedBitmap = if (rotation != 0) {
+            val rotatedBitmap: Bitmap = if (rotation != 0) {
                 try {
                     val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
-                    val rb = Bitmap.createBitmap(
-                        rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true
-                    )
-                    // createBitmap 返回新对象时，原图(rawBitmap)可回收
-                    if (rb != null && rb !== rawBitmap) {
-                        try { rawBitmap.recycle() } catch (_: Throwable) {}
-                        rawBitmap = null
-                    }
+                    val rb = Bitmap.createBitmap(rawBitmap, 0, 0, rawW, rawH, matrix, true)
+                    if (rb !== rawBitmap) intermediates.add(rb)
                     rb
                 } catch (e: Throwable) {
                     DebugLogger.log("StreamOCR", "旋转 Bitmap 失败，使用原图: ${e.message}")
@@ -76,34 +74,29 @@ object OCRFacade {
             } else {
                 rawBitmap
             }
-            if (rotatedBitmap == null || rotatedBitmap.width <= 0 || rotatedBitmap.height <= 0) {
+            if (rotatedBitmap.width <= 0 || rotatedBitmap.height <= 0) {
                 return@withContext emptyMap()
             }
 
             // 3) 放大
             val targetWidth = 1080
-            finalBitmap = if (rotatedBitmap.width < targetWidth) {
+            val finalBitmap: Bitmap = if (rotatedBitmap.width < targetWidth) {
                 try {
                     val scale = targetWidth.toFloat() / rotatedBitmap.width
                     val sb = Bitmap.createScaledBitmap(
                         rotatedBitmap, targetWidth,
                         (rotatedBitmap.height * scale).toInt().coerceAtLeast(1), true
                     )
-                    if (sb != null && sb !== rotatedBitmap) {
-                        try { rotatedBitmap.recycle() } catch (_: Throwable) {}
-                        rotatedBitmap = null
-                    }
+                    if (sb !== rotatedBitmap) intermediates.add(sb)
                     sb
                 } catch (e: Throwable) {
                     DebugLogger.log("StreamOCR", "放大 Bitmap 失败，使用原图: ${e.message}")
                     rotatedBitmap
                 }
             } else {
-                rotatedBitmap.also {
-                    rotatedBitmap = null // 所有权转移到 finalBitmap
-                }
+                rotatedBitmap
             }
-            if (finalBitmap == null || finalBitmap.width <= 0 || finalBitmap.height <= 0) {
+            if (finalBitmap.width <= 0 || finalBitmap.height <= 0) {
                 return@withContext emptyMap()
             }
 
@@ -126,10 +119,12 @@ object OCRFacade {
             DebugLogger.log("StreamOCR", "performStreamOcr 顶层异常: ${e.javaClass.simpleName} ${e.message}")
             return@withContext emptyMap()
         } finally {
-            // 统一回收中间 Bitmap，注意已转移所有权的不要重复 recycle
-            try { if (rawBitmap != null && !rawBitmap.isRecycled) rawBitmap.recycle() } catch (_: Throwable) {}
-            try { if (rotatedBitmap != null && !rotatedBitmap.isRecycled) rotatedBitmap.recycle() } catch (_: Throwable) {}
-            try { if (finalBitmap != null && !finalBitmap.isRecycled) finalBitmap.recycle() } catch (_: Throwable) {}
+            // 统一回收所有中间 Bitmap（同一对象引用只会 recycle 一次，重复 recycle 已被 isRecycled 拦截）
+            for (b in intermediates) {
+                try {
+                    if (!b.isRecycled) b.recycle()
+                } catch (_: Throwable) {}
+            }
         }
     }
 
