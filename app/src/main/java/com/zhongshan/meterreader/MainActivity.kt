@@ -79,48 +79,44 @@ if (uris.isNotEmpty() && !isProcessing) {
 lifecycleScope.launch {
 setProcessing(true)
 if (selectedTemplate?.machineId in listOf("screw_1", "screw_2", "screw_3")) {
-// 修复P3：如果是多张选择(3张)，重置索引；如果是单张多次选择，不重置索引，按当前索引递增
 if (uris.size >= 3) {
 currentScreenIndex = 0
 }
 
-            for (uri in uris.take(3)) {
-                // 防止单张多次选择时索引越界
-                if (currentScreenIndex > 2) {
-                    currentScreenIndex = 0
-                }
- 
-                val result = OCRFacade.performSmartOcr(
-                    this@MainActivity, uri, selectedTemplate!!,
-                    currentScreenIndex, ImageSource.GALLERY, binarizePool
-                )
-                if (result.isNotEmpty()) {
-                    RecognitionResultHolder.saveFieldsForMachine(selectedTemplate!!.machineId, result)
-                }
-                if (currentScreenIndex < 2) {
-                    currentScreenIndex++
-                } else {
-                    // 识别完第3屏后，重置索引，方便下次重新采集
-                    currentScreenIndex = 0
-                }
+        for (uri in uris.take(3)) {
+            if (currentScreenIndex > 2) {
+                currentScreenIndex = 0
             }
  
-            val aggregatedData = RecognitionResultHolder.getFieldsForMachine(selectedTemplate!!.machineId)
-            binding.tvDataPreview.text = aggregatedData.entries
-                .sortedBy { it.key }
-                .joinToString("\n") { (k, v) ->
-                    val labelName = if (k.contains("|")) k.split("|")[1] else k
-                    "【$labelName】：$v"
-                }
-            Toast.makeText(this@MainActivity,
-                "数据已识别完成！请核对后点击填表",
-                Toast.LENGTH_LONG).show()
-            // 修复：移除 updateScreenProgress() 调用，防止覆盖刚显示的识别数据
-        } else {
-            processImageSuspend(uris[0], ImageSource.GALLERY)
+            val result = OCRFacade.performSmartOcr(
+                this@MainActivity, uri, selectedTemplate!!,
+                currentScreenIndex, ImageSource.GALLERY, binarizePool
+            )
+            if (result.isNotEmpty()) {
+                RecognitionResultHolder.saveFieldsForMachine(selectedTemplate!!.machineId, result)
+            }
+            if (currentScreenIndex < 2) {
+                currentScreenIndex++
+            } else {
+                currentScreenIndex = 0
+            }
         }
-        setProcessing(false)
+ 
+        val aggregatedData = RecognitionResultHolder.getFieldsForMachine(selectedTemplate!!.machineId)
+        binding.tvDataPreview.text = aggregatedData.entries
+            .sortedBy { it.key }
+            .joinToString("\n") { (k, v) ->
+                val labelName = if (k.contains("|")) k.split("|")[1] else k
+                "【$labelName】：$v"
+            }
+        Toast.makeText(this@MainActivity,
+            "数据已识别完成！请核对后点击填表",
+            Toast.LENGTH_LONG).show()
+    } else {
+        processImageSuspend(uris[0], ImageSource.GALLERY)
     }
+    setProcessing(false)
+}
 }
 }
 
@@ -149,33 +145,33 @@ binding = ActivityMainBinding.inflate(layoutInflater)
 setContentView(binding.root)
 
 if (savedInstanceState != null) {
-    currentScreenIndex = savedInstanceState.getInt("KEY_SCREEN_INDEX", 0)
-    val restoredFileName = savedInstanceState.getString("KEY_CAMERA_FILENAME")
-    if (restoredFileName != null) {
-        pendingPhotoFileName = restoredFileName
-        val photoFile = File(cacheDir, restoredFileName)
-        pendingCameraUri = FileProvider.getUriForFile(
-            this, "$packageName.fileprovider", photoFile
-        )
-    }
-    savedInstanceState.getString("KEY_TEMPLATE_ID")?.let { id ->
-        selectedTemplate = TemplateManager.findById(id)
-    }
+currentScreenIndex = savedInstanceState.getInt("KEY_SCREEN_INDEX", 0)
+val restoredFileName = savedInstanceState.getString("KEY_CAMERA_FILENAME")
+if (restoredFileName != null) {
+pendingPhotoFileName = restoredFileName
+val photoFile = File(cacheDir, restoredFileName)
+pendingCameraUri = FileProvider.getUriForFile(
+this, "$packageName.fileprovider", photoFile
+)
+}
+savedInstanceState.getString("KEY_TEMPLATE_ID")?.let { id ->
+selectedTemplate = TemplateManager.findById(id)
+}
 } else {
-    selectedTemplate = TemplateManager.allTemplates.first()
+selectedTemplate = TemplateManager.allTemplates.first()
 }
- 
+
 lifecycleScope.launch(Dispatchers.IO) {
-    StorageAndImageUtils.clearOldCacheFiles(cacheDir)
+StorageAndImageUtils.clearOldCacheFiles(cacheDir)
 }
- 
+
 setupUI()
 updateScreenProgress()
- 
+
 if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-    startCamera()
+startCamera()
 } else {
-    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
 }
 }
 
@@ -192,124 +188,123 @@ binding.spinnerDevice.adapter =
 ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, names)
 
 val pos = TemplateManager.allTemplates.indexOfFirst {
-    it.machineId == selectedTemplate?.machineId
+it.machineId == selectedTemplate?.machineId
 }
 if (pos >= 0) binding.spinnerDevice.setSelection(pos)
- 
+
 binding.spinnerDevice.onItemSelectedListener =
-    object : AdapterView.OnItemSelectedListener {
-        override fun onItemSelected(
-            parent: AdapterView<*>?, view: View?, position: Int, id: Long
-        ) {
-            val newTemplate = TemplateManager.allTemplates[position]
-            if (selectedTemplate?.machineId != newTemplate.machineId) {
-                selectedTemplate = newTemplate
-                currentScreenIndex = 0
-                binding.tvDataPreview.text = "已切换至 ${newTemplate.displayName}，请重新采集"
-                updateScreenProgress()
-                initOcrStateManager()
-            }
-        }
- 
-        override fun onNothingSelected(p: AdapterView<*>?) {}
-    }
- 
+object : AdapterView.OnItemSelectedListener {
+override fun onItemSelected(
+parent: AdapterView<*>?, view: View?, position: Int, id: Long
+) {
+val newTemplate = TemplateManager.allTemplates[position]
+if (selectedTemplate?.machineId != newTemplate.machineId) {
+selectedTemplate = newTemplate
+currentScreenIndex = 0
+binding.tvDataPreview.text = "已切换至 ${newTemplate.displayName}，请重新采集"
+updateScreenProgress()
+initOcrStateManager()
+}
+}
+
+    override fun onNothingSelected(p: AdapterView<*>?) {}
+}
 binding.btnGallery.setOnClickListener {
-    if (!isProcessing) {
-        val template = selectedTemplate
-        if (template?.machineId in listOf("screw_1", "screw_2", "screw_3")) {
-            Toast.makeText(this, "请选择3张照片（蒸发器、冷凝器、压缩机）", Toast.LENGTH_SHORT).show()
-        }
-        galleryPickLauncher.launch("image/*")
-    }
+if (!isProcessing) {
+val template = selectedTemplate
+if (template?.machineId in listOf("screw_1", "screw_2", "screw_3")) {
+Toast.makeText(this, "请选择3张照片（蒸发器、冷凝器、压缩机）", Toast.LENGTH_SHORT).show()
 }
- 
+galleryPickLauncher.launch("image/*")
+}
+}
+
 binding.btnClearData.setOnClickListener {
-    lifecycleScope.launch {
-        RecognitionResultHolder.clearAll()
-        withContext(Dispatchers.Main) {
-            binding.tvDataPreview.text = "待采集..."
-            Toast.makeText(this@MainActivity, "已清除所有缓存数据", Toast.LENGTH_SHORT).show()
-            updateScreenProgress()
-        }
-    }
+lifecycleScope.launch {
+RecognitionResultHolder.clearAll()
+withContext(Dispatchers.Main) {
+binding.tvDataPreview.text = "待采集..."
+Toast.makeText(this@MainActivity, "已清除所有缓存数据", Toast.LENGTH_SHORT).show()
+updateScreenProgress()
 }
- 
+}
+}
+
 binding.btnRoiCalibration.visibility = View.GONE
 binding.btnRoiCalibration.isEnabled = false
- 
+
 binding.btnPresetSettings.setOnClickListener {
-    if (!isProcessing && !isFinishing) {
-        startActivity(Intent(this, PresetSettingsActivity::class.java))
-    }
+if (!isProcessing && !isFinishing) {
+startActivity(Intent(this, PresetSettingsActivity::class.java))
 }
- 
+}
+
 binding.btnTransferAndFill.setOnLongClickListener {
-    DebugLogger.saveAndShare(this@MainActivity)
-    Toast.makeText(this, "日志已导出，请通过分享发送给开发者", Toast.LENGTH_LONG).show()
-    true
+DebugLogger.saveAndShare(this@MainActivity)
+Toast.makeText(this, "日志已导出，请通过分享发送给开发者", Toast.LENGTH_LONG).show()
+true
 }
- 
+
 binding.btnTransferAndFill.setOnClickListener {
-    val template = selectedTemplate ?: return@setOnClickListener
-    lifecycleScope.launch {
-        if (template.machineId in listOf("screw_1", "screw_2", "screw_3")) {
-            val data1 = RecognitionResultHolder.getFieldsForMachine("screw_1")
-            val data2 = RecognitionResultHolder.getFieldsForMachine("screw_2")
-            val data3 = RecognitionResultHolder.getFieldsForMachine("screw_3")
- 
-            if (data1.isEmpty() && data2.isEmpty() && data3.isEmpty()) {
-                Toast.makeText(this@MainActivity, "暂无采集数据", Toast.LENGTH_SHORT).show()
-                return@launch
-            }
- 
-            val fillData = buildScrewFillData()
-            val intent = Intent(this@MainActivity, WebViewActivity::class.java).apply {
-                putExtra("EXTRA_URL", template.formUrl)
-                putExtra("EXTRA_TAB_NAME", TemplateManager.getTabName(template))
-                putExtra("EXTRA_FILL_DATA_JSON", fillData.toString())
-                putExtra("EXTRA_FILL_TYPE", "screw")
-            }
-            startActivity(intent)
- 
-            RecognitionResultHolder.clearMachineData("screw_1")
-            RecognitionResultHolder.clearMachineData("screw_2")
-            RecognitionResultHolder.clearMachineData("screw_3")
- 
-            withContext(Dispatchers.Main) {
-                binding.tvDataPreview.text = "待采集..."
-                setProcessing(false)
-            }
+val template = selectedTemplate ?: return@setOnClickListener
+lifecycleScope.launch {
+if (template.machineId in listOf("screw_1", "screw_2", "screw_3")) {
+val data1 = RecognitionResultHolder.getFieldsForMachine("screw_1")
+val data2 = RecognitionResultHolder.getFieldsForMachine("screw_2")
+val data3 = RecognitionResultHolder.getFieldsForMachine("screw_3")
+
+        if (data1.isEmpty() && data2.isEmpty() && data3.isEmpty()) {
+            Toast.makeText(this@MainActivity, "暂无采集数据", Toast.LENGTH_SHORT).show()
             return@launch
         }
  
-        if (template.isHeatExchanger) {
-            val cachedData = RecognitionResultHolder.getFieldsForMachine(template.machineId)
-            if (cachedData.isEmpty()) {
-                Toast.makeText(this@MainActivity, "暂无采集数据", Toast.LENGTH_SHORT).show()
-                return@launch
-            }
+        val fillData = buildScrewFillData()
+        val intent = Intent(this@MainActivity, WebViewActivity::class.java).apply {
+            putExtra("EXTRA_URL", template.formUrl)
+            putExtra("EXTRA_TAB_NAME", TemplateManager.getTabName(template))
+            putExtra("EXTRA_FILL_DATA_JSON", fillData.toString())
+            putExtra("EXTRA_FILL_TYPE", "screw")
+        }
+        startActivity(intent)
  
-            val fillData = buildPlateFillData(template.machineId, cachedData)
-            val intent = Intent(this@MainActivity, WebViewActivity::class.java).apply {
-                putExtra("EXTRA_URL", template.formUrl)
-                putExtra("EXTRA_TAB_NAME", TemplateManager.getTabName(template))
-                putExtra("EXTRA_FILL_DATA_JSON", fillData.toString())
-                putExtra("EXTRA_FILL_TYPE", "plate")
-            }
-            startActivity(intent)
+        RecognitionResultHolder.clearMachineData("screw_1")
+        RecognitionResultHolder.clearMachineData("screw_2")
+        RecognitionResultHolder.clearMachineData("screw_3")
  
-            RecognitionResultHolder.clearMachineData(template.machineId)
+        withContext(Dispatchers.Main) {
+            binding.tvDataPreview.text = "待采集..."
+            setProcessing(false)
+        }
+        return@launch
+    }
  
-            withContext(Dispatchers.Main) {
-                binding.tvDataPreview.text = "待采集..."
-                setProcessing(false)
-            }
+    if (template.isHeatExchanger) {
+        val cachedData = RecognitionResultHolder.getFieldsForMachine(template.machineId)
+        if (cachedData.isEmpty()) {
+            Toast.makeText(this@MainActivity, "暂无采集数据", Toast.LENGTH_SHORT).show()
             return@launch
         }
+ 
+        val fillData = buildPlateFillData(template.machineId, cachedData)
+        val intent = Intent(this@MainActivity, WebViewActivity::class.java).apply {
+            putExtra("EXTRA_URL", template.formUrl)
+            putExtra("EXTRA_TAB_NAME", TemplateManager.getTabName(template))
+            putExtra("EXTRA_FILL_DATA_JSON", fillData.toString())
+            putExtra("EXTRA_FILL_TYPE", "plate")
+        }
+        startActivity(intent)
+ 
+        RecognitionResultHolder.clearMachineData(template.machineId)
+ 
+        withContext(Dispatchers.Main) {
+            binding.tvDataPreview.text = "待采集..."
+            setProcessing(false)
+        }
+        return@launch
     }
 }
- 
+}
+
 initOcrStateManager()
 }
 
@@ -321,24 +316,24 @@ val preview = Preview.Builder().build().also {
 it.setSurfaceProvider(binding.viewFinder.surfaceProvider)
 }
 
-    val analyzer = ImageAnalysis.Builder()
-        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-        .setTargetResolution(Size(1080, 1920))
-        .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888) // 修复P1：使用RGBA_8888格式，避免toBitmap()在某些设备上闪退
-        .build()
-        .also {
-            it.setAnalyzer(executor) { imageProxy ->
-                if (isStreaming || isProcessing) {
-                    imageProxy.close()
-                    return@setAnalyzer
-                }
-                isStreaming = true
-                processStreamFrame(imageProxy)
+val analyzer = ImageAnalysis.Builder()
+    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+    .setTargetResolution(Size(1080, 1920))
+    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+    .build()
+    .also {
+        it.setAnalyzer(executor) { imageProxy ->
+            if (isStreaming || isProcessing) {
+                imageProxy.close()
+                return@setAnalyzer
             }
+            isStreaming = true
+            processStreamFrame(imageProxy)
         }
+    }
  
-    cameraProvider?.unbindAll()
-    cameraProvider?.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analyzer)
+cameraProvider?.unbindAll()
+cameraProvider?.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analyzer)
 }, ContextCompat.getMainExecutor(this))
 }
 
@@ -350,29 +345,40 @@ return
 }
 
 lifecycleScope.launch(Dispatchers.IO) {
-    try {
-        val result = OCRFacade.performStreamOcr(imageProxy, template, currentScreenIndex, binarizePool)
-        if (result.isNotEmpty()) {
-            TraneOcrStateManager.submitFrame(result)
-            withContext(Dispatchers.Main) {
-                val aggregatedData = RecognitionResultHolder.getFieldsForMachine(template.machineId)
-                binding.tvDataPreview.text = aggregatedData.entries
-                    .sortedBy { it.key }
-                    .joinToString("\n") { (k, v) ->
-                        val labelName = if (k.contains("|")) k.split("|")[1] else k
-                        "【$labelName】：$v"
-                    }
-            }
-        }
-    } catch (e: Exception) {
-        DebugLogger.log("StreamOCR", "处理异常: ${e.message}")
-    } catch (e: OutOfMemoryError) { // 修复P1：捕获内存溢出，防止闪退
-        DebugLogger.log("StreamOCR", "内存溢出异常: ${e.message}")
-        System.gc()
-    } finally {
-        imageProxy.close()
-        isStreaming = false
-    }
+try {
+val result = OCRFacade.performStreamOcr(imageProxy, template, currentScreenIndex, binarizePool)
+if (result.isNotEmpty()) {
+TraneOcrStateManager.submitFrame(result)
+withContext(Dispatchers.Main) {
+val aggregatedData = RecognitionResultHolder.getFieldsForMachine(template.machineId)
+binding.tvDataPreview.text = aggregatedData.entries
+.sortedBy { it.key }
+.joinToString("\n") { (k, v) ->
+val labelName = if (k.contains("|")) k.split("|")[1] else k
+"【
+l
+a
+b
+e
+l
+N
+a
+m
+e
+】：
+labelName】：v"
+}
+}
+}
+} catch (e: Exception) {
+DebugLogger.log("StreamOCR", "处理异常: ${e.message}")
+} catch (e: OutOfMemoryError) {
+DebugLogger.log("StreamOCR", "内存溢出异常: ${e.message}")
+System.gc()
+} finally {
+imageProxy.close()
+isStreaming = false
+}
 }
 }
 
@@ -393,23 +399,23 @@ cameraProvider?.unbindAll()
 
 val vibrator = getSystemService(Vibrator::class.java)
 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-    vibrator?.vibrate(VibrationEffect.createOneShot(200, VibrationEffect.DEFAULT_AMPLITUDE))
+vibrator?.vibrate(VibrationEffect.createOneShot(200, VibrationEffect.DEFAULT_AMPLITUDE))
 }
- 
+
 lifecycleScope.launch(Dispatchers.IO) {
-    RecognitionResultHolder.saveFieldsForMachine(template.machineId, data)
-    withContext(Dispatchers.Main) {
-        val totalScreens = DeviceOcrStrategy.totalScreens(template.machineId)
-        if (!template.isHeatExchanger && currentScreenIndex < totalScreens - 1) {
-            currentScreenIndex++
-            Toast.makeText(this@MainActivity, "第${currentScreenIndex}屏采集成功，请对准下一屏", Toast.LENGTH_SHORT).show()
-            updateScreenProgress()
-            startCamera()
-            initOcrStateManager()
-        } else {
-            Toast.makeText(this@MainActivity, "设备全部数据已采集完成！请核对屏幕数据后点击填表", Toast.LENGTH_LONG).show()
-        }
-    }
+RecognitionResultHolder.saveFieldsForMachine(template.machineId, data)
+withContext(Dispatchers.Main) {
+val totalScreens = DeviceOcrStrategy.totalScreens(template.machineId)
+if (!template.isHeatExchanger && currentScreenIndex < totalScreens - 1) {
+currentScreenIndex++
+Toast.makeText(this@MainActivity, "第${currentScreenIndex}屏采集成功，请对准下一屏", Toast.LENGTH_SHORT).show()
+updateScreenProgress()
+startCamera()
+initOcrStateManager()
+} else {
+Toast.makeText(this@MainActivity, "设备全部数据已采集完成！请核对屏幕数据后点击填表", Toast.LENGTH_LONG).show()
+}
+}
 }
 }
 
@@ -418,59 +424,59 @@ val root = JSONObject()
 root.put("operator", "")
 
 val allScrewKeys = listOf(
-    "evapInTemp", "evapOutTemp", "evapInPressure", "evapOutPressure",
-    "evapRefPressure", "evapTemp", "condInTemp", "condOutTemp",
-    "condInPressure", "condOutPressure", "condRefPressure", "condTemp",
-    "compOilPressure", "compDischargeTemp", "motorCurrent", "hostLoad"
+"evapInTemp", "evapOutTemp", "evapInPressure", "evapOutPressure",
+"evapRefPressure", "evapTemp", "condInTemp", "condOutTemp",
+"condInPressure", "condOutPressure", "condRefPressure", "condTemp",
+"compOilPressure", "compDischargeTemp", "motorCurrent", "hostLoad"
 )
- 
+
 for (unitNo in 1..3) {
-    val machineId = "screw_$unitNo"
-    val cachedData = RecognitionResultHolder.getFieldsForMachine(machineId)
-    val unitData = mutableMapOf<String, String>()
-    var hasRealData = false
+val machineId = "screw_$unitNo"
+val cachedData = RecognitionResultHolder.getFieldsForMachine(machineId)
+val unitData = mutableMapOf<String, String>()
+var hasRealData = false
+
+for (key in allScrewKeys) {
+    unitData[key] = ""
+}
  
-    for (key in allScrewKeys) {
-        unitData[key] = ""
+for ((key, value) in cachedData) {
+    val parts = key.split("|")
+    if (parts.size != 2) continue
+    val label = parts[1]
+    val dataKey = labelToScrewDataKey(label)
+    if (dataKey != null) {
+        unitData[dataKey] = value
+        hasRealData = true
     }
+}
  
-    for ((key, value) in cachedData) {
-        val parts = key.split("|")
+if (hasRealData) {
+    val unitJson = JSONObject()
+    for ((k, v) in unitData) unitJson.put(k, v)
+ 
+    val presets = PresetManager.getPresetsForMachine(machineId)
+    for ((fieldIdWithLabel, value) in presets) {
+        val parts = fieldIdWithLabel.split("|")
         if (parts.size != 2) continue
-        val label = parts[1]
-        val dataKey = labelToScrewDataKey(label)
-        if (dataKey != null) {
-            unitData[dataKey] = value
-            hasRealData = true
-        }
+        val dataKey = labelToScrewDataKey(parts[1])
+        if (dataKey != null) unitJson.put(dataKey, value)
     }
  
-    if (hasRealData) {
-        val unitJson = JSONObject()
-        for ((k, v) in unitData) unitJson.put(k, v)
+    val pumpsKey = "screw_${unitNo}_pumps"
+    val pumpsStr = PresetManager.getPresetValue(pumpsKey, "")
+    val pumpsList = pumpsStr.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+    val pumpsArray = JSONArray()
+    pumpsList.forEach { pumpsArray.put(it) }
+    unitJson.put("pumps", pumpsArray)
+    unitJson.put("remark", "")
  
-        val presets = PresetManager.getPresetsForMachine(machineId)
-        for ((fieldIdWithLabel, value) in presets) {
-            val parts = fieldIdWithLabel.split("|")
-            if (parts.size != 2) continue
-            val dataKey = labelToScrewDataKey(parts[1])
-            if (dataKey != null) unitJson.put(dataKey, value)
-        }
- 
-        val pumpsKey = "screw_${unitNo}_pumps"
-        val pumpsStr = PresetManager.getPresetValue(pumpsKey, "")
-        val pumpsList = pumpsStr.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-        val pumpsArray = JSONArray()
-        pumpsList.forEach { pumpsArray.put(it) }
-        unitJson.put("pumps", pumpsArray)
-        unitJson.put("remark", "")
- 
-        when (unitNo) {
-            1 -> root.put("unit1", unitJson)
-            2 -> root.put("unit2", unitJson)
-            3 -> root.put("unit3", unitJson)
-        }
+    when (unitNo) {
+        1 -> root.put("unit1", unitJson)
+        2 -> root.put("unit2", unitJson)
+        3 -> root.put("unit3", unitJson)
     }
+}
 }
 return root
 }
@@ -504,29 +510,29 @@ val groupDefs = plateGroupDefs[machineId] ?: return root
 val allPlateKeys = listOf("inTemp", "outTemp", "inPressure", "outPressure", "steamPressure", "pumpCurrent", "remark")
 
 for ((groupTitle, prefix) in groupDefs) {
-    val fields = JSONObject()
-    for (key in allPlateKeys) {
-        fields.put(key, "")
-    }
-    for ((key, value) in cachedData) {
-        if (!key.startsWith("$prefix|")) continue
-        val label = key.substringAfter("|")
-        val fieldKey = when {
-            label.contains("进水温度") -> "inTemp"
-            label.contains("出水温度") -> "outTemp"
-            label.contains("进水压力") -> "inPressure"
-            label.contains("出水压力") -> "outPressure"
-            label.contains("蒸汽压力") -> "steamPressure"
-            label.contains("水泵电流") -> "pumpCurrent"
-            label.contains("备注") -> "remark"
-            else -> continue
-        }
-        fields.put(fieldKey, value)
-    }
-    val groupObj = JSONObject()
-    groupObj.put("groupTitle", groupTitle)
-    groupObj.put("fields", fields)
-    groupsArray.put(groupObj)
+val fields = JSONObject()
+for (key in allPlateKeys) {
+fields.put(key, "")
+}
+for ((key, value) in cachedData) {
+if (!key.startsWith("$prefix|")) continue
+val label = key.substringAfter("|")
+val fieldKey = when {
+label.contains("进水温度") -> "inTemp"
+label.contains("出水温度") -> "outTemp"
+label.contains("进水压力") -> "inPressure"
+label.contains("出水压力") -> "outPressure"
+label.contains("蒸汽压力") -> "steamPressure"
+label.contains("水泵电流") -> "pumpCurrent"
+label.contains("备注") -> "remark"
+else -> continue
+}
+fields.put(fieldKey, value)
+}
+val groupObj = JSONObject()
+groupObj.put("groupTitle", groupTitle)
+groupObj.put("fields", fields)
+groupsArray.put(groupObj)
 }
 root.put("plateGroups", groupsArray)
 return root
@@ -550,23 +556,34 @@ RecognitionResultHolder.saveFieldsForMachine(template.machineId, result)
 
 val aggregatedData = RecognitionResultHolder.getFieldsForMachine(template.machineId)
 binding.tvDataPreview.text = aggregatedData.entries
-    .sortedBy { it.key }
-    .joinToString("\n") { (k, v) ->
-        val labelName = if (k.contains("|")) k.split("|")[1] else k
-        "【$labelName】：$v"
-    }
- 
+.sortedBy { it.key }
+.joinToString("\n") { (k, v) ->
+val labelName = if (k.contains("|")) k.split("|")[1] else k
+"【
+l
+a
+b
+e
+l
+N
+a
+m
+e
+】：
+labelName】：v"
+}
+
 val totalScreens = DeviceOcrStrategy.totalScreens(template.machineId)
 if (result.isNotEmpty()) {
-    if (!template.isHeatExchanger && currentScreenIndex < totalScreens - 1) {
-        currentScreenIndex++
-        Toast.makeText(this, "第${currentScreenIndex}屏采集成功，请选择下一屏照片", Toast.LENGTH_SHORT).show()
-    } else {
-        Toast.makeText(this, "设备全部数据已采集完成！请核对屏幕数据后点击填表", Toast.LENGTH_LONG).show()
-    }
-    updateScreenProgress()
+if (!template.isHeatExchanger && currentScreenIndex < totalScreens - 1) {
+currentScreenIndex++
+Toast.makeText(this, "第${currentScreenIndex}屏采集成功，请选择下一屏照片", Toast.LENGTH_SHORT).show()
 } else {
-    Toast.makeText(this, "未识别到有效数据", Toast.LENGTH_SHORT).show()
+Toast.makeText(this, "设备全部数据已采集完成！请核对屏幕数据后点击填表", Toast.LENGTH_LONG).show()
+}
+updateScreenProgress()
+} else {
+Toast.makeText(this, "未识别到有效数据", Toast.LENGTH_SHORT).show()
 }
 }
 
@@ -576,13 +593,22 @@ val total = DeviceOcrStrategy.totalScreens(template.machineId)
 if (template.isHeatExchanger || total <= 1) return
 
 if (template.machineId in listOf("screw_1", "screw_2", "screw_3")) {
-    binding.tvDataPreview.text = "请点击图库，一次选择3张设备屏幕照片"
-    return
+binding.tvDataPreview.text = "请点击图库，一次选择3张设备屏幕照片"
+return
 }
- 
+
 val current = currentScreenIndex + 1
 val screen = DeviceOcrStrategy.screenName(template.machineId, currentScreenIndex)
-binding.tvDataPreview.text = "请将屏幕对准黄框 · 拍第 $current/$total 屏 · $screen"
+binding.tvDataPreview.text = "请将屏幕对准黄框 · 拍第 
+c
+u
+r
+r
+e
+n
+t
+/
+current/total 屏 · $screen"
 }
 
 override fun onDestroy() {
