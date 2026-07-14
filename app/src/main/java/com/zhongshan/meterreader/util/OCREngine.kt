@@ -113,19 +113,7 @@
 	                100
 	            }
 	            DebugLogger.log("OCR-Plate-Debug", "行距中位数 = $medianDiff")
-	            // 核心修复 Q1：先按 Y 间隙切块，再分配标题，杜绝漏识别标题导致数据被吞噬
-	            val groups = mutableListOf<DeviceGroup>()
-	            var currentStart = 0
-	            for (i in 1 until numericItems.size) {
-	                val diff = numericItems[i].yTop - numericItems[i - 1].yTop
-	                if (diff > medianDiff * 2.0) { // 严格遵守 2.0 倍指导原则
-	                    val chunk = numericItems.subList(currentStart, i)
-	                    groups.add(formGroup(chunk, dataItems.filter { it.isDeviceTitle }, deviceNames, groups.size))
-	                    currentStart = i
-	                }
-	            }
-	            val lastChunk = numericItems.subList(currentStart, numericItems.size)
-	            groups.add(formGroup(lastChunk, dataItems.filter { it.isDeviceTitle }, deviceNames, groups.size))
+	            val groups = buildGroups(dataItems, deviceNames, medianDiff, fieldsPerGroup)
 	            for (g in groups) {
 	                DebugLogger.log("OCR-Plate-Debug", "分组: device='${g.deviceName}'(idx=${g.deviceIdx}) 数值=${g.numbers.map { it.value }}")
 	            }
@@ -157,25 +145,58 @@
 	        }
 	        return@withContext outData
 	    }
-	    private fun formGroup(
-	        chunk: List<DataItem>,
-	        titles: List<DataItem>,
+	    private fun buildGroups(
+	        dataItems: List<DataItem>,
 	        deviceNames: List<String>,
-	        fallbackIdx: Int
-	    ): DeviceGroup {
-	        if (chunk.isEmpty()) return DeviceGroup("", 0, emptyList())
-	        val chunkTopY = chunk.first().yTop
-	        var matchedTitle: String? = null
-	        for (t in titles) {
-	            if (t.yTop <= chunkTopY) {
-	                matchedTitle = t.value
+	        medianDiff: Int,
+	        fieldsPerGroup: Int
+	    ): List<DeviceGroup> {
+	        val titles = dataItems.filter { it.isDeviceTitle }.sortedBy { it.yTop }
+	        val numericItems = dataItems.filter { !it.isDeviceTitle }.sortedBy { it.yTop }
+	        // 核心修复 Q1：按 Y 间隙和“固定字段数”双重判定进行强制物理切块
+	        val sub = mutableListOf<MutableList<ExtractedNumber>>()
+	        var currentGroup = mutableListOf<ExtractedNumber>()
+	        for (i in numericItems.indices) {
+	            val num = ExtractedNumber(numericItems[i].yTop, numericItems[i].value)
+	            if (currentGroup.isNotEmpty()) {
+	                val diff = num.y - currentGroup.last().y
+	                // 超过 2.0 倍行距，或者已经达到了一个设备应有的字段数，强制切组
+	                if (diff > medianDiff * 2.0 || currentGroup.size >= fieldsPerGroup) {
+	                    if (currentGroup.size > 1 || diff <= medianDiff * 2.0) {
+	                        sub.add(currentGroup)
+	                        currentGroup = mutableListOf()
+	                    } else {
+	                        currentGroup.clear() // 噪声丢弃
+	                    }
+	                }
+	            }
+	            currentGroup.add(num)
+	        }
+	        if (currentGroup.isNotEmpty()) {
+	            sub.add(currentGroup)
+	        }
+	        val groups = mutableListOf<DeviceGroup>()
+	        var titleCursor = 0
+	        var devCursor = 0
+	        for (chunk in sub) {
+	            if (chunk.isEmpty()) continue
+	            val chunkTopY = chunk.first().y
+	            // 找在这个 chunk 之前最近的标题
+	            var matchedTitle: String? = null
+	            while (titleCursor < titles.size && titles[titleCursor].yTop <= chunkTopY) {
+	                matchedTitle = titles[titleCursor].value
+	                titleCursor++
+	            }
+	            val deviceName = matchedTitle ?: deviceNames.getOrElse(devCursor) { "未知板交" }
+	            val deviceIdx = deviceNames.indexOf(deviceName).let { if (it >= 0) it else devCursor }
+	            groups.add(DeviceGroup(deviceName, deviceIdx, chunk))
+	            if (matchedTitle != null) {
+	                devCursor = deviceIdx + 1
 	            } else {
-	                break
+	                devCursor++
 	            }
 	        }
-	        val deviceName = matchedTitle ?: deviceNames.getOrElse(fallbackIdx) { "未知板交" }
-	        val deviceIdx = deviceNames.indexOf(deviceName).let { if (it >= 0) it else fallbackIdx }
-	        return DeviceGroup(deviceName, deviceIdx, chunk.map { ExtractedNumber(it.yTop, it.value) })
+	        return groups
 	    }
 	    private fun cleanPlateTitle(s: String): String {
 	        return s.replace(" ", "")
@@ -192,26 +213,34 @@
 	        looseTitleKeywords: Map<String, List<String>>
 	    ): String? {
 	        if (cleaned.isEmpty()) return null
+	        // 1. 完全匹配
 	        for (dn in deviceNames) {
 	            if (cleaned == cleanPlateTitle(dn)) return dn
 	        }
+	        // 2. 开头匹配
 	        for (dn in deviceNames) {
 	            val cd = cleanPlateTitle(dn)
 	            if (cd.isNotEmpty() && cleaned.startsWith(cd)) return dn
 	        }
+	        // 3. 核心数字序列匹配（即使“号”、“#”丢失也能匹配）
+	        val cleanedNums = Regex("""\d+""").findAll(cleaned).map { it.value }.toList()
 	        for (dn in deviceNames) {
-	            val cd = cleanPlateTitle(dn)
-	            // 修复：去掉 # 和 楼 防止 OCR 丢失这些符号时前缀匹配失败
-	            val head = cd.replace("水汀板交", "").replace("板交", "").replace("#", "").replace("楼", "").trim()
-	            if (head.isNotEmpty() && cleaned.startsWith(head) && cleaned.contains("板交")) {
+	            val dnNums = Regex("""\d+""").findAll(dn).map { it.value }.toList()
+	            if (cleaned.contains("板交") && cleanedNums == dnNums) {
 	                return dn
 	            }
 	        }
+	        // 4. 松散匹配
 	        for (dn in deviceNames) {
 	            val kws = looseTitleKeywords[dn] ?: continue
-	            if (kws.all { cleaned.contains(it) }) {
-	                if (cleaned.contains("板交")) return dn
+	            var allMatch = true
+	            for (kw in kws) {
+	                if (!cleaned.contains(kw)) {
+	                    allMatch = false
+	                    break
+	                }
 	            }
+	            if (allMatch && cleaned.contains("板交")) return dn
 	        }
 	        return null
 	    }
@@ -221,10 +250,11 @@
 	            val kws = mutableListOf<String>()
 	            val nums = Regex("""\d+""").findAll(dn).map { it.value }.toList()
 	            kws.addAll(nums)
-	            kws.add("板交")
+	            if (dn.contains("板交")) kws.add("板交")
 	            if (dn.contains("水汀")) kws.add("水汀")
 	            if (dn.contains("备用")) kws.add("备用")
-	            map.getOrPut(dn) { mutableListOf() }.addAll(kws)
+	            if (dn.contains("楼")) kws.add("楼")
+	            map.getOrPut(dn) { mutableListOf() }.addAll(kws.distinct())
 	        }
 	        return map
 	    }
