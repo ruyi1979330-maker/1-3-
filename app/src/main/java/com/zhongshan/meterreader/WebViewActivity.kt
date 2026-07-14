@@ -279,7 +279,7 @@
 	                }
 	            }
 	            window.__pumpChecking = false;
-	            // 修复 Q3/Q4：提供全局停止函数，供 Android 端在返回/销毁前调用，清理所有定时器
+	            window.__pumpClickedInThisRound = {}; // 修复 Q2：防抖机制，防止同一轮死循环点击
 	            window.__stopEngine = function() {
 	                try {
 	                    if (window.__ocrScanTimer) { clearInterval(window.__ocrScanTimer); window.__ocrScanTimer = null; }
@@ -375,7 +375,6 @@
 	                            var pumpName = pumpItems[k];
 	                            if (!window.__pumpPending[pumpName]) continue;
 	                            var pumpClean = cleanText(pumpName);
-	                            var matched = false;
 	                            for (var i = 0; i < labelEls.length; i++) {
 	                                var el = labelEls[i];
 	                                if (el.offsetParent === null && el.offsetWidth === 0) continue;
@@ -387,39 +386,44 @@
 	                                if (sib) near = cleanText(sib.innerText || sib.textContent || '');
 	                                if (cleanText(title) === pumpClean || inner.indexOf(pumpClean) > -1 ||
 	                                    cleanText(aria) === pumpClean || near === pumpClean) {
-	                                    matched = true;
-	                                    var isCheckCls = function(node){
-	                                        if (!node) return false;
-	                                        var cn = ' ' + (node.className || '') + ' ';
-	                                        return cn.indexOf('Checkbox-checked') > -1 ||
-	                                               cn.indexOf(' checked') > -1 ||
-	                                               cn.indexOf('is-checked') > -1;
-	                                    };
-	                                    var isChecked = isCheckCls(el) ||
+	                                    // 修复 Q2：优先通过 input.checked 判定状态
+	                                    var inputEl = el.querySelector('input[type=checkbox]') || el.querySelector('input[type=radio]');
+	                                    var isChecked = false;
+	                                    if (inputEl) {
+	                                        isChecked = inputEl.checked;
+	                                    } else {
+	                                        var isCheckCls = function(node){
+	                                            if (!node) return false;
+	                                            var cn = ' ' + (node.className || '') + ' ';
+	                                            return cn.indexOf('Checkbox-checked') > -1 ||
+	                                                   cn.indexOf(' checked') > -1 ||
+	                                                   cn.indexOf('is-checked') > -1;
+	                                        };
+	                                        isChecked = isCheckCls(el) ||
 	                                                    isCheckCls(el.querySelector('.Checkbox-box')) ||
-	                                                    el.getAttribute('aria-checked') === 'true' ||
-	                                                    (el.querySelector('input[type=checkbox]') &&
-	                                                     el.querySelector('input[type=checkbox]').checked);
+	                                                    el.getAttribute('aria-checked') === 'true';
+	                                    }
 	                                    if (isChecked) {
 	                                        window.__pumpPending[pumpName] = false;
 	                                        delete window.__pumpPending[pumpName];
 	                                        AndroidBridge.log('冷冻泵已是勾选状态: ' + pumpName);
 	                                    } else {
-	                                        try {
-	                                            el.dispatchEvent(new Event('mouseover', { bubbles: true }));
-	                                            el.dispatchEvent(new Event('mousedown', { bubbles: true }));
-	                                            el.dispatchEvent(new Event('mouseup', { bubbles: true }));
-	                                        } catch(e) {}
-	                                        el.click();
-	                                        var inputEl = el.querySelector('input[type=checkbox]');
-	                                        if(inputEl) inputEl.click();
-	                                        AndroidBridge.log('执行冷冻泵点击: ' + pumpName);
+	                                        // 修复 Q2：本轮已点击过的不再点击，防止死循环
+	                                        if (!window.__pumpClickedInThisRound[pumpName]) {
+	                                            try {
+	                                                el.dispatchEvent(new Event('mouseover', { bubbles: true }));
+	                                                el.dispatchEvent(new Event('mousedown', { bubbles: true }));
+	                                                el.dispatchEvent(new Event('mouseup', { bubbles: true }));
+	                                            } catch(e) {}
+	                                            el.click();
+	                                            if (inputEl) inputEl.click(); // 补充点击 input
+	                                            window.__pumpClickedInThisRound[pumpName] = true;
+	                                            AndroidBridge.log('执行冷冻泵点击: ' + pumpName);
+	                                        }
 	                                    }
 	                                    break;
 	                                }
 	                            }
-	                            if (!matched) {}
-	                            if (window.__pumpPending[pumpName]) {}
 	                        }
 	                        retryCount++;
 	                        var pendingLeft = false;
@@ -428,6 +432,7 @@
 	                            clearInterval(window.__pumpInterval);
 	                            window.__pumpInterval = null;
 	                            window.__pumpChecking = false;
+	                            window.__pumpClickedInThisRound = {}; // 清空本轮点击记录
 	                            AndroidBridge.log('冷冻泵检查完毕 (轮次=' + retryCount + ')');
 	                        }
 	                    } catch(e) {
@@ -436,11 +441,11 @@
 	                            clearInterval(window.__pumpInterval);
 	                            window.__pumpInterval = null;
 	                            window.__pumpChecking = false;
+	                            window.__pumpClickedInThisRound = {};
 	                        }
 	                    }
 	                }, 500);
 	            }
-	            // 修复 Q2：增加 MutationObserver 监听，标签页 DOM 一变化就触发检查，避免错过勾选时机
 	            if (!window.__pumpObserver) {
 	                try {
 	                    window.__pumpObserver = new MutationObserver(function(mutations) {
@@ -548,19 +553,14 @@
 	            try { binding.webView.onResume() } catch (_: Exception) {}
 	        }
 	    }
-	    // 修复 Q3：返回前先停掉 JS 定时器，避免 V8 引擎阻塞造成卡死或多次点击
+	    // 修复 Q3：填表页不需要内部后退，直接 finish 避免回到 about:blank 导致的多次点击问题
 	    override fun onBackPressed() {
 	        binding.webView.evaluateJavascript("if(window.__stopEngine){window.__stopEngine();}", null)
 	        binding.webView.postDelayed({
 	            if (isActivityDestroyed) return@postDelayed
-	            if (binding.webView.canGoBack() && hasLoadedRealUrl) {
-	                binding.webView.goBack()
-	            } else {
-	                super.onBackPressed()
-	            }
-	        }, 150) // 给 JS 引擎 150ms 清理时间
+	            finish()
+	        }, 150)
 	    }
-	    // 修复 Q4：销毁前先停掉 JS 定时器，解绑资源，避免重建时底层死锁
 	    override fun onDestroy() {
 	        isActivityDestroyed = true
 	        timeoutHandler.removeCallbacksAndMessages(null)
