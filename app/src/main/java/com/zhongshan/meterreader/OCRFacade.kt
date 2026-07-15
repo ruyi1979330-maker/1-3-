@@ -30,6 +30,8 @@ object OCRFacade {
      *   - Bitmap 转换/旋转/缩放全部包裹在 try/finally 中，任何异常都不会向外抛 OOM/空指针导致闪退；
      *   - 对 width/height<=0、toBitmap 返回 null 等异常输入做保护；
      *   - 中间产生的 Bitmap 统一在 finally 里 recycle，避免内存泄漏叠加导致的 OOM 闪退。
+     *
+     * 增加 Q3 日志：原始尺寸、旋转角度、最终送识别尺寸、OCR/总耗时、结果字段数与各字段值。
      */
     suspend fun performStreamOcr(
         imageProxy: ImageProxy,
@@ -37,6 +39,7 @@ object OCRFacade {
         screenIndex: Int,
         resourcePool: BinarizeResourcePool
     ): Map<String, String> = withContext(Dispatchers.IO) {
+        val startTs = System.currentTimeMillis()
         // 修复 Q1：用 val 级联 + intermediates 列表统一回收，避免 var 被 lambda 捕获导致的
         //         smart-cast 失败与所有权混乱，保证任何异常都不会 OOM 闪退。
         // 注意：本方法绝不 close imageProxy（交由 MainActivity 的 finally 处理），避免重复 close。
@@ -61,6 +64,7 @@ object OCRFacade {
 
             // 2) 旋转
             val rotation = try { imageProxy.imageInfo.rotationDegrees } catch (e: Throwable) { 0 }
+            DebugLogger.log("StreamOCR", "原始帧尺寸: ${rawW}x${rawH} 旋转角度: $rotation")
             val rotatedBitmap: Bitmap = if (rotation != 0) {
                 try {
                     val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
@@ -99,22 +103,39 @@ object OCRFacade {
             if (finalBitmap.width <= 0 || finalBitmap.height <= 0) {
                 return@withContext emptyMap()
             }
+            DebugLogger.log("StreamOCR", "最终送识别尺寸: ${finalBitmap.width}x${finalBitmap.height}")
 
-            // 4) 识别（核心逻辑不修改，仅包裹异常）
-            try {
+            // 4) 识别（核心逻辑不修改，仅包裹异常 + 记录耗时/结果）
+            val ocrStartTs = System.currentTimeMillis()
+            val ocrResult: Map<String, String> = try {
                 if (template.isHeatExchanger) {
                     val plateKeywordMap = TemplateManager.getPlateKeywordMap(template.roomId)
-                    return@withContext OCREngine.extractPlateData(finalBitmap, template.roomId == 1, plateKeywordMap)
+                    OCREngine.extractPlateData(finalBitmap, template.roomId == 1, plateKeywordMap)
+                } else {
+                    extractScrewDataFromBitmap(finalBitmap, template, screenIndex, "StreamOCR")
                 }
-                return@withContext extractScrewDataFromBitmap(finalBitmap, template, screenIndex, "StreamOCR")
             } catch (oom: OutOfMemoryError) {
                 DebugLogger.log("StreamOCR", "识别过程 OOM: ${oom.message}")
                 System.gc()
-                return@withContext emptyMap()
+                emptyMap()
             } catch (e: Throwable) {
                 DebugLogger.log("StreamOCR", "识别过程异常: ${e.javaClass.simpleName} ${e.message}")
-                return@withContext emptyMap()
+                emptyMap()
             }
+
+            val ocrElapsed = System.currentTimeMillis() - ocrStartTs
+            val totalElapsed = System.currentTimeMillis() - startTs
+            DebugLogger.log(
+                "StreamOCR",
+                "识别完成 OCR耗时=${ocrElapsed}ms 总耗时=${totalElapsed}ms 字段数=${ocrResult.size}"
+            )
+            if (ocrResult.isNotEmpty()) {
+                val fieldsDump = ocrResult.entries
+                    .joinToString(", ") { "${it.key}=${it.value}" }
+                    .take(500)
+                DebugLogger.log("StreamOCR", "识别字段: $fieldsDump")
+            }
+            return@withContext ocrResult
         } catch (e: Throwable) {
             DebugLogger.log("StreamOCR", "performStreamOcr 顶层异常: ${e.javaClass.simpleName} ${e.message}")
             return@withContext emptyMap()
