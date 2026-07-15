@@ -319,6 +319,7 @@ class MainActivity : AppCompatActivity() {
                 cameraProvider?.unbindAll()
                 cameraProvider?.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analyzer)
                 isCameraActive = true
+                DebugLogger.log("Camera", "相机已成功绑定到生命周期，开启帧分析")
             } catch (e: Exception) {
                 isCameraActive = false
                 DebugLogger.log("Camera", "bindToLifecycle 失败: ${e.message}")
@@ -326,49 +327,87 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
+    /**
+     * 幂等、防二次 close 的 ImageProxy 关闭工具。
+     * closed[0] 作为关闭标志位，保证整个帧处理中只关闭一次，避免重复 close 崩溃。
+     */
+    private fun safeCloseImageProxy(
+        imageProxy: androidx.camera.core.ImageProxy?,
+        closed: BooleanArray
+    ) {
+        if (imageProxy == null || closed[0]) return
+        try {
+            imageProxy.close()
+            closed[0] = true
+        } catch (e: Throwable) {
+            DebugLogger.log("Camera", "关闭 ImageProxy 异常: ${e.javaClass.simpleName} ${e.message}")
+        }
+    }
+
     private fun processStreamFrame(imageProxy: androidx.camera.core.ImageProxy) {
         val template = selectedTemplate
-        var imageProxyClosed = false
+        val closed = booleanArrayOf(false)
+        val frameTs = System.currentTimeMillis()
+        DebugLogger.log(
+            "StreamOCR",
+            "帧接收 ts=$frameTs screenIndex=$currentScreenIndex isStreaming=$isStreaming isProcessing=$isProcessing"
+        )
+
+        // 修复 Q1 关键守卫：Activity 已 finish/destroy 时不再向 lifecycleScope launch 协程。
+        // 否则协程可能在已取消的 scope 上启动，finally 块不执行导致 imageProxy 泄漏，
+        // 或在销毁的 Activity 上操作 binding 引发崩溃。
+        if (isFinishing || isDestroyed) {
+            DebugLogger.log("StreamOCR", "Activity 已 finish/destroy，直接丢弃并关闭帧")
+            safeCloseImageProxy(imageProxy, closed)
+            isStreaming = false
+            return
+        }
+
         if (template == null) {
-            try { if (!imageProxyClosed) { imageProxy.close(); imageProxyClosed = true } } catch (_: Throwable) {}
+            DebugLogger.log("StreamOCR", "selectedTemplate 为空，跳过本帧")
+            safeCloseImageProxy(imageProxy, closed)
             isStreaming = false
             return
         }
         // 关键：在协程启动前捕获当前屏幕索引，防止协程执行过程中 currentScreenIndex 被修改
         val frameScreenIndex = currentScreenIndex
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val result = OCRFacade.performStreamOcr(imageProxy, template, frameScreenIndex, binarizePool)
-                if (result.isNotEmpty()) {
-                    TraneOcrStateManager.submitFrame(result)
-                    withContext(Dispatchers.Main) {
-                        if (!isFinishing && !isDestroyed) {
-                            val aggregatedData = RecognitionResultHolder.getFieldsForMachine(template.machineId)
-                            binding.tvDataPreview.text = aggregatedData.entries
-                                .sortedBy { it.key }
-                                .joinToString("\n") { (k, v) ->
-                                    val labelName = if (k.contains("|")) k.split("|")[1] else k
-                                    "【$labelName】：$v"
-                                }
+        try {
+            lifecycleScope.launch(Dispatchers.IO) {
+                try {
+                    val result = OCRFacade.performStreamOcr(imageProxy, template, frameScreenIndex, binarizePool)
+                    val elapsed = System.currentTimeMillis() - frameTs
+                    DebugLogger.log("StreamOCR", "帧处理完成 耗时=${elapsed}ms 结果字段数=${result.size}")
+                    if (result.isNotEmpty()) {
+                        TraneOcrStateManager.submitFrame(result)
+                        withContext(Dispatchers.Main) {
+                            if (!isFinishing && !isDestroyed) {
+                                val aggregatedData = RecognitionResultHolder.getFieldsForMachine(template.machineId)
+                                binding.tvDataPreview.text = aggregatedData.entries
+                                    .sortedBy { it.key }
+                                    .joinToString("\n") { (k, v) ->
+                                        val labelName = if (k.contains("|")) k.split("|")[1] else k
+                                        "【$labelName】：$v"
+                                    }
+                            }
                         }
                     }
+                } catch (e: Exception) {
+                    DebugLogger.log("StreamOCR", "处理异常: ${e.javaClass.simpleName} ${e.message}")
+                } catch (e: OutOfMemoryError) {
+                    DebugLogger.log("StreamOCR", "内存溢出异常: ${e.message}")
+                    System.gc()
+                } catch (e: Throwable) {
+                    DebugLogger.log("StreamOCR", "未知异常: ${e.javaClass.simpleName} ${e.message}")
+                } finally {
+                    safeCloseImageProxy(imageProxy, closed)
+                    isStreaming = false
                 }
-            } catch (e: Exception) {
-                DebugLogger.log("StreamOCR", "处理异常: ${e.javaClass.simpleName} ${e.message}")
-            } catch (e: OutOfMemoryError) {
-                DebugLogger.log("StreamOCR", "内存溢出异常: ${e.message}")
-                System.gc()
-            } catch (e: Throwable) {
-                DebugLogger.log("StreamOCR", "未知异常: ${e.javaClass.simpleName} ${e.message}")
-            } finally {
-                try {
-                    if (!imageProxyClosed) {
-                        imageProxy.close()
-                        imageProxyClosed = true
-                    }
-                } catch (_: Throwable) {}
-                isStreaming = false
             }
+        } catch (e: Throwable) {
+            // 协程启动本身异常（如 scope 已取消），确保帧被关闭、标志位复位，避免泄漏或崩溃
+            DebugLogger.log("StreamOCR", "协程启动异常: ${e.javaClass.simpleName} ${e.message}")
+            safeCloseImageProxy(imageProxy, closed)
+            isStreaming = false
         }
     }
 
