@@ -34,6 +34,9 @@ class WebViewActivity : AppCompatActivity() {
     @Volatile private var isActivityDestroyed = false
     @Volatile private var hasLoadedRealUrl = false
 
+    // 统一的中文请求头，引导服务端优先返回中文内容
+    private val zhHeaders = mapOf("Accept-Language" to "zh-CN,zh;q=0.9")
+
     private val screwFieldLabelMap = mapOf(
         "evapInTemp" to "蒸发器进口水温",
         "evapOutTemp" to "蒸发器出口水温",
@@ -113,7 +116,8 @@ class WebViewActivity : AppCompatActivity() {
             binding.webView.post {
                 if (!isActivityDestroyed && targetUrl.isNotEmpty()) {
                     hasLoadedRealUrl = true
-                    binding.webView.loadUrl(targetUrl)
+                    // Q2 修复：附加中文请求头，引导服务端返回中文页面
+                    binding.webView.loadUrl(targetUrl, zhHeaders)
                 }
             }
         }
@@ -235,7 +239,8 @@ class WebViewActivity : AppCompatActivity() {
             isFillDone.set(false)
             if (targetUrl.isNotEmpty()) {
                 hasLoadedRealUrl = true
-                binding.webView.loadUrl(targetUrl)
+                // Q2 修复：重试同样附加中文请求头
+                binding.webView.loadUrl(targetUrl, zhHeaders)
             }
         }
     }
@@ -291,6 +296,9 @@ class WebViewActivity : AppCompatActivity() {
                     if (window.__ocrScanTimer) { clearInterval(window.__ocrScanTimer); window.__ocrScanTimer = null; }
                     if (window.__pumpInterval) { clearInterval(window.__pumpInterval); window.__pumpInterval = null; }
                     if (window.__pumpObserver) { window.__pumpObserver.disconnect(); window.__pumpObserver = null; }
+                    // Q2：同步清理独立语言修正定时器与观察者
+                    if (window.__langTimer) { clearInterval(window.__langTimer); window.__langTimer = null; }
+                    if (window.__langObserver) { window.__langObserver.disconnect(); window.__langObserver = null; }
                     window.__pumpChecking = false;
                     if(window.AndroidBridge) AndroidBridge.log('JS引擎已安全停止所有定时任务');
                 } catch(e) {}
@@ -302,11 +310,18 @@ class WebViewActivity : AppCompatActivity() {
             function cleanText(text) { return (text || '').replace(/\s+/g, '').replace(/\u3000/g, ''); }
 
             // 英文转中文（全量保留，不可省略）
+            // Q2 关键：补全提交成功页三句英文 + 其他常见英文文案
             function forceChinese() {
                 try {
                     var EN_ZH = [
-                        ['Select all','全选'], ['Select All','全选'], ['Submit Success','提交成功'],
-                        ['Submission Success','提交成功'], ['Submit success','提交成功'], ['Save Success','保存成功'],
+                        ['Form submitted successfully','表单提交成功'],
+                        ['Form Submitted Successfully','表单提交成功'],
+                        ['Submit another one','再提交一份'],
+                        ['Submit Another One','再提交一份'],
+                        ['Scan to share','扫码分享'],
+                        ['Select all','全选'], ['Select All','全选'],
+                        ['Submit Success','提交成功'], ['Submission Success','提交成功'],
+                        ['Submit success','提交成功'], ['Save Success','保存成功'],
                         ['Submit','提交'], ['Cancel','取消'], ['Confirm','确认'], ['OK','确定']
                     ];
                     var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
@@ -556,6 +571,31 @@ class WebViewActivity : AppCompatActivity() {
 
             window.__ocrScanTimer = setInterval(scanAndAutofillEngine, ${AUTO_SCAN_INTERVAL_MS});
             scanAndAutofillEngine();
+
+            // ===== Q2 修复：独立持久的语言修正机制 =====
+            // 表单是 SPA，提交成功后 URL 不变、不触发 onPageFinished，且填充引擎可能已 idle 停止。
+            // 因此建立一个独立于 __ocrScanTimer 的语言修正定时器 + body 观察者：
+            // 每秒 + 每次 DOM 变化(防抖) 都执行一次 forceChinese，确保提交成功页英文也能被翻译。
+            window.__langLastRun = 0;
+            function forceChineseSafe() {
+                try {
+                    var now = Date.now();
+                    if (now - window.__langLastRun < 800) return; // 防抖：800ms 内不重复执行
+                    window.__langLastRun = now;
+                    forceChinese();
+                } catch(e) {}
+            }
+            if (window.__langTimer) clearInterval(window.__langTimer);
+            window.__langTimer = setInterval(forceChineseSafe, 1000);
+            try {
+                if (window.__langObserver) window.__langObserver.disconnect();
+                window.__langObserver = new MutationObserver(function() {
+                    forceChineseSafe();
+                });
+                window.__langObserver.observe(document.body, { childList: true, subtree: true });
+            } catch(e) {}
+            // ===== Q2 修复结束 =====
+
             setTimeout(function(){
                 if (document.activeElement) document.activeElement.blur();
             }, 1000);
