@@ -20,31 +20,20 @@ object OCREngine {
     private data class RawLine(val y: Int, val text: String)
 
     /**
-     * 板交数据提取入口（Ultimate：语义锚定架构 + Latin OCR 容错引擎）
+     * 板交数据提取入口（Ultimate v2：语义锚定 + 几何兜底混合引擎）
      *
      * ============================================================
-     * 设计理念
+     * 核心修复：解决 Latin OCR 无法识别中文导致的丢数据问题
      * ============================================================
-     * 1. 架构层（Claude 贡献）：采用“逐字段锚定 + 组内多数表决”。
-     *    - 不依赖绝对坐标，解决了设备停机导致的错位问题。
-     *    - 利用“数值与其 Label 在页面上物理紧邻”的特性进行定位。
+     * 针对 1号机房 "1号楼"、"3号楼" 等中文标题识别失败的情况，
+     * 引入 "几何固定区域" 作为第二级判断依据。
      *
-     * 2. 算法层（智谱优化）：针对 ML Kit Latin OCR 的“中文弱识别”特性，
-     *    重写了 `matchDeviceIndexLatinFuzzy` 匹配引擎。
-     *    - 移除“板交”强校验（Latin 引擎极易漏掉此二字）。
-     *    - 引入“特征金字塔”匹配：数字 > 标点(#号) > 高频汉字(楼/水/备)。
-     *    - 支持“残缺匹配”：即使“1号楼板交”只识别出“1#”或“1号楼”，也能精准定位。
-     *
-     * ============================================================
-     * 算法流程
-     * ============================================================
-     * 1. 提取全量文本行，分离为数值行与文本行。
-     * 2. 对每个数值，向上方小范围内搜索最近的文本行作为锚点。
-     * 3. 使用容错引擎解析锚点文本，猜测其归属的设备索引。
-     * 4. 按物理距离将数值聚类为数据块。
-     * 5. 对每个数据块进行“多数投票”决定其设备归属。
-     * 6. 安全策略：若无法确定归属（如 OCR 全乱码），默认丢弃该块，
-     *    防止错误填表。
+     * 策略：
+     * 1. 优先使用语义锚定（文本匹配）。如果匹配成功（如 "10号楼"），置信度最高。
+     * 2. 如果语义锚定失败（无中文识别），启用几何兜底。
+     *    - 基于全页面长截图固定布局假设，计算数据块的平均 Y 坐标。
+     *    - 将 Y 坐标映射到屏幕对应的设备槽位。
+     *    - 这样即使完全没有文本识别，只要布局固定，数据依然不会丢失或错位。
      */
     suspend fun extractPlateData(
         bitmap: Bitmap,
@@ -53,7 +42,7 @@ object OCREngine {
     ): Map<String, String> = withContext(Dispatchers.IO) {
         val outData = HashMap<String, String>()
         try {
-            DebugLogger.log("OCR-Plate-Debug", "开始板交识别 (Ultimate-LatinFriendly)，原图尺寸: ${bitmap.width}x${bitmap.height}, isRoom1=$isRoom1")
+            DebugLogger.log("OCR-Plate-Debug", "开始板交识别 (Ultimate-Hybrid)，原图尺寸: ${bitmap.width}x${bitmap.height}, isRoom1=$isRoom1")
 
             // ── 1. 文本行提取与去重 ──────────────────────────────────────────
             val rawLines = mutableListOf<RawLine>()
@@ -143,17 +132,13 @@ object OCREngine {
             DebugLogger.log("OCR-Plate-Debug", "行距中位数 = $medianDiff, 数字行总数 = ${numLines.size}")
 
             // ── 5. 逐数值就近锚定 ───────────────────────────────────────────────
-            // 搜索窗口：1.2 倍行距，覆盖 Label 与 Value 的视觉间距
             val labelSearchWindow = (medianDiff * 1.2).toInt().coerceAtLeast(15)
             data class TaggedNumber(val y: Int, val value: String, val deviceIdx: Int?)
             
             val taggedNumbers = numLines.map { num ->
-                // 向上搜索最近的文本行
                 val candidate = textLines
                     .filter { it.y <= num.y && it.y >= num.y - labelSearchWindow }
                     .maxByOrNull { it.y }
-                
-                // 使用新的容错匹配引擎
                 val deviceIdx = candidate?.let { matchDeviceIndexLatinFuzzy(it.text, deviceNames) }
                 TaggedNumber(num.y, num.value, deviceIdx)
             }
@@ -169,13 +154,12 @@ object OCREngine {
                 if (current.numbers.isNotEmpty()) {
                     val gap = num.y - current.numbers.last().y
                     val forceBySize = current.numbers.size >= fieldsPerGroup
-                    val forceByGap = gap > medianDiff * 2.2 // 略微放宽阈值，避免误切
+                    val forceByGap = gap > medianDiff * 2.2
                     if (forceBySize || forceByGap) {
                         if (current.numbers.size > 1 || !forceByGap) {
                             chunks.add(current)
                             current = Chunk()
                         } else {
-                            // 孤立噪声点，丢弃
                             current = Chunk()
                         }
                     }
@@ -185,13 +169,17 @@ object OCREngine {
             if (current.numbers.isNotEmpty()) chunks.add(current)
             DebugLogger.log("OCR-Plate-Debug", "物理聚类切分出 ${chunks.size} 个数据块")
 
-            // ── 7. 组内多数表决 ───────────────────────────────────────────────
-            val FALLBACK_ON_NO_ANCHOR = false // 安全策略：无锚点不猜测
+            // ── 7. 混合引擎决策：语义锚定 OR 几何兜底 ───────────────────────
             for ((chunkIdx, chunk) in chunks.withIndex()) {
                 if (chunk.numbers.isEmpty()) continue
 
                 val votes = chunk.numbers.mapNotNull { it.deviceIdx }
+                
+                // 计算平均 Y 坐标用于几何兜底
+                val avgY = chunk.numbers.map { it.y }.average().toInt()
+
                 val deviceIdx: Int? = if (votes.isNotEmpty()) {
+                    // 尝试多数表决
                     votes.groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
                 } else {
                     null
@@ -199,30 +187,26 @@ object OCREngine {
 
                 val resolvedIdx: Int?
                 val confidenceNote: String
+                
                 if (deviceIdx != null) {
+                    // 策略 A：语义锚定成功
                     resolvedIdx = deviceIdx
-                    val consistentVotes = votes.count { it == deviceIdx }
-                    confidenceNote = "锚定命中(${votes.size}/${chunk.numbers.size}票, 一致=$consistentVotes)"
-                } else if (FALLBACK_ON_NO_ANCHOR) {
-                    // 兜底逻辑（慎用）
-                    resolvedIdx = chunkIdx 
-                    confidenceNote = "无锚点-顺序兜底"
+                    confidenceNote = "语义锚定命中"
                 } else {
-                    resolvedIdx = null
-                    confidenceNote = "无锚点-已跳过"
+                    // 策略 B：语义锚定失败 -> 触发几何兜底 (Fixed Zone Fallback)
+                    // 适用于固定布局的全页面截图
+                    val geoIdx = getDeviceIndexByZone(avgY, bitmap.height, deviceNames.size)
+                    resolvedIdx = geoIdx
+                    confidenceNote = "语义失败-几何兜底(Y=$avgY)"
                 }
 
-                if (resolvedIdx == null) {
-                    DebugLogger.log("OCR-Plate-Debug", "数据块[$chunkIdx] $confidenceNote —— 跳过")
-                    continue
-                }
-                if (resolvedIdx >= deviceNames.size) {
-                    DebugLogger.log("OCR-Plate-Debug", "数据块[$chunkIdx] 映射越界，跳过")
+                if (resolvedIdx == null || resolvedIdx >= deviceNames.size) {
+                    DebugLogger.log("OCR-Plate-Debug", "数据块[$chunkIdx] 映射异常，跳过")
                     continue
                 }
 
                 val deviceName = deviceNames[resolvedIdx]
-                DebugLogger.log("OCR-Plate-Debug", "数据块[$chunkIdx] -> $deviceName($resolvedIdx) $confidenceNote")
+                DebugLogger.log("OCR-Plate-Debug", "数据块[$chunkIdx] -> $deviceName($resolvedIdx) [$confidenceNote]")
 
                 // ── 组内空位补齐 ─────────────────────────────────────────────
                 val sortedValues = chunk.numbers.sortedBy { it.y }
@@ -256,78 +240,67 @@ object OCREngine {
     }
 
     /**
+     * 几何兜底：固定区域映射
+     * 根据数据块的平均 Y 坐标，将其映射到固定的设备槽位。
+     * 假设：截图为全页面固定布局。
+     */
+    private fun getDeviceIndexByZone(y: Int, imgHeight: Int, deviceCount: Int): Int {
+        val headerRatio = 0.12f // 顶部表头缓冲
+        val headerHeight = (imgHeight * headerRatio).toInt()
+        val effectiveHeight = imgHeight - headerHeight
+        val slotHeight = (effectiveHeight.toFloat() / deviceCount).coerceAtLeast(50f)
+        val maxIndex = deviceCount - 1
+        
+        // 计算相对 Y 坐标
+        val relativeY = (y - headerHeight).coerceAtLeast(0)
+        
+        // 计算槽位索引
+        return (relativeY / slotHeight).toInt().coerceIn(0, maxIndex)
+    }
+
+    /**
      * 针对 ML Kit Latin OCR 的容错匹配引擎。
-     * 
-     * 核心策略：特征金字塔匹配。
-     * 1. 优先匹配唯一数字组合（如 "10" + "1#"）。
-     * 2. 其次匹配特定符号（#）或高频残留汉字（楼、水）。
-     * 3. 最后兜底匹配通用数字（1, 3），但需排除干扰项。
      */
     private fun matchDeviceIndexLatinFuzzy(rawText: String, deviceNames: List<String>): Int? {
-        // 预处理：全小写，去空格
         val t = rawText.lowercase().replace(" ", "")
         
         // ── Room 3 简单模式 ────────────────────────────────────────────────
         if (deviceNames.size == 2) {
-            // 1#板交 vs 2#板交
-            // 检查 "1#" 或 "1#"（OCR可能把#识别成其他符号，这里假设#识别率尚可，或者利用数字位置）
-            // Latin OCR 对 # 识别通常还行，如果不行，只能靠数字顺序
             if (t.contains("1#") || (t.contains("1") && t.contains("#"))) return 0
             if (t.contains("2#") || (t.contains("2") && t.contains("#"))) return 1
             return null
         }
 
         // ── Room 1 复杂消歧模式 ─────────────────────────────────────────────
-        // 目标：
-        // 0: 1号楼板交
-        // 1: 3号楼板交
-        // 2: 备用板交
-        // 3: 10号楼1#板交
-        // 4: 10号楼2#板交
-        // 5: 1号楼水汀板交
+        // 0: 1号楼板交, 1: 3号楼板交, 2: 备用板交
+        // 3: 10号楼1#板交, 4: 10号楼2#板交, 5: 1号楼水汀板交
 
         // 1. 极高优先级：10号楼系列 (包含数字 10)
-        // 特征：必须包含 "10"
         if (t.contains("10")) {
-            // 细分：是 1# 还是 2#？
-            // 检查 "2" 或 "2#" (如果有2，大概率是10号楼2#)
-            if (t.contains("2") && !t.contains("2#").not()) return 4 // 粗略匹配 2#
-            // 否则默认为 10号楼1#
+            if (t.contains("2") && !t.contains("2#").not()) return 4
             return 3
         }
 
         // 2. 高优先级：1号楼水汀板交 (Idx 5)
-        // 特征：包含 "水" (shui) 或 "汀" (ting)。
-        // Latin OCR 有时能识别出 "水" 或 "Water" (如果是混合)，或者残缺的 "水"。
         if (t.contains("水") || t.contains("汀") || t.contains("water")) {
-            // 必须同时包含 "1" 防止误判其他楼号的水汀设备（如果有的话）
-            // 但根据列表，只有 1号楼有水汀，所以只要出现 "水" 基本就是它。
             return 5
         }
 
         // 3. 高优先级：备用板交 (Idx 2)
-        // 特征：包含 "备" (bei) 或 "by" (拼音首字母?)
-        // Latin OCR 对 "备" 识别较差，可能出现乱码。
-        // 如果没有其他特征匹配，且包含 "by" (可能是英文混淆) 或 "备"，尝试匹配。
         if (t.contains("备") || t.contains("by") || t.contains("standby")) {
             return 2
         }
 
         // 4. 中优先级：3号楼板交 (Idx 1)
-        // 特征：包含 "3" 和 "号楼" (或 "号")
         if ((t.contains("3号楼") || t.contains("3号")) && !t.contains("1号楼")) {
             return 1
         }
 
         // 5. 低优先级：1号楼板交 (Idx 0)
-        // 特征：包含 "1" 和 "号楼" (或 "号")。
-        // 必须排除上面已经匹配的情况（无10，无水汀）。
         if ((t.contains("1号楼") || t.contains("1号")) && !t.contains("10")) {
             return 0
         }
         
-        // 兜底：只识别到了一个简单的数字 "1" 或 "3"
-        // 这种情况比较危险，容易误判。不如返回 null 依赖表决。
         return null
     }
 }
