@@ -106,13 +106,18 @@ object OCRFacade {
             DebugLogger.log("StreamOCR", "最终送识别尺寸: ${finalBitmap.width}x${finalBitmap.height}")
 
             // 4) 识别（核心逻辑不修改，仅包裹异常 + 记录耗时/结果）
+            // 【本次新增-约克】调度层路由：york 开头走独立约克解析引擎，与特灵/板交完全隔离。
             val ocrStartTs = System.currentTimeMillis()
             val ocrResult: Map<String, String> = try {
-                if (template.isHeatExchanger) {
-                    val plateKeywordMap = TemplateManager.getPlateKeywordMap(template.roomId)
-                    OCREngine.extractPlateData(finalBitmap, template.roomId == 1, plateKeywordMap)
-                } else {
-                    extractScrewDataFromBitmap(finalBitmap, template, screenIndex, "StreamOCR")
+                when {
+                    template.machineId.startsWith("york") ->
+                        extractYorkDataFromBitmap(finalBitmap, "StreamOCR")
+                    template.isHeatExchanger -> {
+                        val plateKeywordMap = TemplateManager.getPlateKeywordMap(template.roomId)
+                        OCREngine.extractPlateData(finalBitmap, template.roomId == 1, plateKeywordMap)
+                    }
+                    else ->
+                        extractScrewDataFromBitmap(finalBitmap, template, screenIndex, "StreamOCR")
                 }
             } catch (oom: OutOfMemoryError) {
                 DebugLogger.log("StreamOCR", "识别过程 OOM: ${oom.message}")
@@ -166,11 +171,17 @@ object OCRFacade {
             return@withContext emptyMap()
         }
         try {
-            if (template.isHeatExchanger) {
-                val plateKeywordMap = TemplateManager.getPlateKeywordMap(template.roomId)
-                return@withContext OCREngine.extractPlateData(bitmap, template.roomId == 1, plateKeywordMap)
+            // 【本次新增-约克】调度层路由：york 开头走独立约克解析引擎。
+            when {
+                template.machineId.startsWith("york") ->
+                    return@withContext extractYorkDataFromBitmap(bitmap, "SmartOCR")
+                template.isHeatExchanger -> {
+                    val plateKeywordMap = TemplateManager.getPlateKeywordMap(template.roomId)
+                    return@withContext OCREngine.extractPlateData(bitmap, template.roomId == 1, plateKeywordMap)
+                }
+                else ->
+                    return@withContext extractScrewDataFromBitmap(bitmap, template, screenIndex, "SmartOCR")
             }
-            return@withContext extractScrewDataFromBitmap(bitmap, template, screenIndex, "SmartOCR")
         } finally {
             bitmap.recycle()
         }
@@ -319,6 +330,159 @@ object OCRFacade {
             }
         }
         DebugLogger.log(tag, "最终提取结果: $results")
+        return@withContext results
+    }
+
+    // =====================================================================
+    // 【本次新增-约克】约克螺杆机单屏全数据 OCR 解析引擎
+    // 红线：完全独立于 extractScrewDataFromBitmap / extractPlateData，二者方法体一字未改。
+    //
+    // 策略：
+    //   1) 全图 ML Kit 识别 → 取所有文本行（含 Y/X 中心坐标）；
+    //   2) 按约克专有特征词匹配行，同行取数（取关键字右侧第一个数字，否则取最后一个数字）；
+    //      若该关键字行无数值，回退到 Y 坐标紧邻的下一含数行；
+    //   3) 对歧义词“饱和温度”使用屏幕左右中线消歧（左半=蒸发器，右半=冷凝器），
+    //      复合词“蒸发器饱和温度/冷凝器饱和温度”自带前缀无需消歧。
+    //
+    // 输出 key 形如 "semanticKey|中文标签"，与 DeviceOcrStrategy.yorkRoiFields 严格对齐。
+    // 注意：motorCurrent 此处输出原始 %满载安培 数值；
+    //       × 2.5 的乘数拦截计算由 MainActivity.buildYorkFillData 执行，本引擎不掺入业务换算。
+    // =====================================================================
+    private suspend fun extractYorkDataFromBitmap(
+        bitmap: Bitmap,
+        tag: String
+    ): Map<String, String> = withContext(Dispatchers.IO) {
+        DebugLogger.log(tag, "开始约克机组原图识别，尺寸: ${bitmap.width}x${bitmap.height}")
+        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        val image = InputImage.fromBitmap(bitmap, 0)
+        val visionResult = recognizer.process(image).await()
+        val lines = visionResult.textBlocks.flatMap { it.lines }
+        DebugLogger.log(tag, "ML Kit 原始识别到 ${lines.size} 行文本")
+
+        data class YorkLine(val y: Float, val x: Float, val text: String, val cleaned: String)
+        val sortedLines = lines.mapNotNull { line ->
+            val box = line.boundingBox ?: return@mapNotNull null
+            val raw = line.text.trim()
+            YorkLine(
+                box.exactCenterY(),
+                box.exactCenterX(),
+                raw,
+                raw.replace(" ", "").replace("\u3000", "")
+            )
+        }.sortedBy { it.y }
+
+        DebugLogger.log(tag, "--- 约克 按Y排序后文本行 ---")
+        sortedLines.forEachIndexed { idx, l ->
+            DebugLogger.log(tag, "约克行[$idx] Y=${l.y.toInt()} X=${l.x.toInt()} Text=${l.text}")
+        }
+        if (sortedLines.isEmpty()) {
+            DebugLogger.log(tag, "约克：未识别到任何文本行")
+            return@withContext emptyMap()
+        }
+
+        // 屏幕左右中线（像素）：左半=蒸发器，右半=冷凝器
+        val midX = bitmap.width / 2f
+        // 仅对裸歧义词“饱和温度”启用左右消歧，其余关键词（含蒸发器/冷凝器前缀）全文匹配
+        val numRegex = Regex("""-?\d+\.?\d*""")
+
+        // 取数后统一清洗为“纯净数字字符串”，确保下游 TraneOcrStateManager.isValid 的
+        // 严格相等校验 (match.value != value) 能通过——否则带 %/℃/kPa 等后缀的值会被剔除，
+        // 导致相机自动锁定永远凑不齐票数（隐患 A）。
+        fun cleanNum(raw: String): String? {
+            // 优先匹配“最多2位小数”的浮点数（兼容负数），剥离任何非数字后缀
+            val m = Regex("""-?\d{1,4}(\.\d{1,2})?""").find(raw) ?: return null
+            return m.value
+        }
+
+        fun extractNumber(text: String, keyword: String): String? {
+            val matches = numRegex.findAll(text).toList()
+            if (matches.isEmpty()) return null
+            val kIdx = text.indexOf(keyword)
+            val chosen: String = if (kIdx >= 0) {
+                // 关键字右侧第一个数字优先；若右侧无，退而取最后一个数字（少数布局值在左侧）
+                val after = matches.firstOrNull { it.range.first >= kIdx + keyword.length }
+                after?.value ?: matches.last().value
+            } else matches.last().value
+            return cleanNum(chosen)
+        }
+
+        // side='L'=左半屏(蒸发器) 'R'=右半屏(冷凝器) '?'=全屏不限
+        // 修复：消歧判定改为由调用方的 side 字段驱动，而非硬编码某关键词。
+        //   这样蒸发/冷凝器的压力、饱和温度、冷冻水/冷却水温度 都能各自按屏幕左右栏区分，
+        //   杜绝"冷冻水/冷却水"仅一字之差导致左右串值。
+        fun findValue(keywords: List<String>, side: Char): String? {
+            val applySide = side != '?'
+            val candidates = if (applySide) {
+                sortedLines.filter { if (side == 'L') it.x < midX else it.x >= midX }
+            } else sortedLines
+
+            for (kw in keywords) {
+                // 第一轮：同行同时含关键字与数字
+                for (line in candidates) {
+                    if (line.cleaned.contains(kw)) {
+                        val num = extractNumber(line.cleaned, kw)
+                        if (num != null) {
+                            DebugLogger.log(tag, "约克匹配[命中同行] 关键词=$kw side=$side 值=$num 原文=${line.text}")
+                            return num
+                        }
+                    }
+                }
+                // 第二轮：关键字行无数值 → 取该行 Y 增大方向最近的含数字行（同侧范围内）
+                val kwLine = candidates.firstOrNull { it.cleaned.contains(kw) }
+                if (kwLine != null) {
+                    val yThreshold = bitmap.height * 0.06f
+                    val nearby = candidates
+                        .filter { it.y > kwLine.y && (it.y - kwLine.y) <= yThreshold }
+                        .mapNotNull { ln -> cleanNum(numRegex.find(ln.cleaned)?.value ?: "")?.let { v -> ln.y to v } }
+                        .minByOrNull { it.first }
+                    if (nearby != null) {
+                        DebugLogger.log(tag, "约克匹配[命中邻近行] 关键词=$kw side=$side 值=${nearby.second}")
+                        return nearby.second
+                    }
+                }
+            }
+            DebugLogger.log(tag, "约克匹配[未命中] keywords=$keywords side=$side")
+            return null
+        }
+
+        data class YorkFieldDef(
+            val key: String,
+            val label: String,
+            val keywords: List<String>,
+            val side: Char
+        )
+        // 修复：屏幕真实布局为左右双栏——左半=蒸发器(冷冻水侧)，右半=冷凝器(冷却水侧)。
+        //   因此 evap* 系列统一 side='L'，cond* 系列统一 side='R'，由 findValue 按屏幕中线消歧，
+        //   彻底避免"冷冻水/冷却水"、"蒸发/冷凝"一字之差导致的左右串值。
+        // 关键词按屏幕实际显示词(权威对应表)为准，OCR 易错字处补容错变体。
+        val fieldDefs = listOf(
+            // —— 蒸发器侧（左半屏）——
+            YorkFieldDef("evapRefPressure",   "蒸发器压力",     listOf("蒸发器蒸发压力", "蒸发压力", "蒸发器压力"), 'L'),
+            YorkFieldDef("evapTemp",          "蒸发器饱和温度", listOf("蒸发器饱和温度", "饱和温度"), 'L'),
+            YorkFieldDef("evapInTemp",        "冷冻水温度返回", listOf("冷冻水温度返回", "冷冻水返回", "冷冻水温度返"), 'L'),
+            YorkFieldDef("evapOutTemp",       "冷冻水温度出水", listOf("冷冻水温度出水", "冷冻水出水", "冷冻水温度出"), 'L'),
+            // —— 冷凝器侧（右半屏）——
+            YorkFieldDef("condRefPressure",   "冷凝器压力",     listOf("冷凝器冷凝压力", "冷凝压力", "冷凝器压力"), 'R'),
+            YorkFieldDef("condTemp",          "冷凝器饱和温度", listOf("冷凝器饱和温度", "饱和温度"), 'R'),
+            YorkFieldDef("condInTemp",        "冷却水温度返回", listOf("冷却水温度返回", "冷却水返回", "冷却水温度返"), 'R'),
+            YorkFieldDef("condOutTemp",       "冷却水温度出水", listOf("冷却水温度出水", "冷却水出水", "冷却水温度出"), 'R'),
+            // —— 压缩机/电机区（整屏，通常居中或单列，不消歧）——
+            YorkFieldDef("compOilPressure",   "油压差",         listOf("油压差", "油压"), '?'),
+            YorkFieldDef("compOilTemp",       "油温",           listOf("油温", "油箱温度"), '?'),
+            YorkFieldDef("compDischargeTemp", "压缩机出口温度", listOf("压缩机出口温度", "出口温度", "排口温度"), '?'),
+            YorkFieldDef("compGuideOpening",  "滑阀位置",       listOf("滑阀位置", "滑阀"), '?'),
+            YorkFieldDef("motorCurrent",      "满载安培",       listOf("%满载安培", "满载安培"), '?')
+        )
+
+        val results = mutableMapOf<String, String>()
+        for (def in fieldDefs) {
+            val raw = findValue(def.keywords, def.side) ?: continue
+            // 兜底二次清洗：保证输出为 TraneOcrStateManager.isValid 能通过的“纯数字字符串”。
+            //   motorCurrent 的 × 2.5 乘数换算由 MainActivity.buildYorkFillData 执行，此处仍存原始值。
+            val value = cleanNum(raw) ?: raw
+            results["${def.key}|${def.label}"] = value
+        }
+        DebugLogger.log(tag, "约克最终提取结果: $results")
         return@withContext results
     }
 }
