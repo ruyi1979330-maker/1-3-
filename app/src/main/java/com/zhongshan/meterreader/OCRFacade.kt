@@ -334,6 +334,8 @@
 	    //      若该关键字行无数值，回退到 Y 坐标紧邻的下一含数行；
 	    //   3) 对歧义词“饱和温度”使用屏幕左右中线消歧（左半=蒸发器，右半=冷凝器），
 	    //      复合词“蒸发器饱和温度/冷凝器饱和温度”自带前缀无需消歧。
+	    //   4) 【优化】针对 ML Kit OCR 易产生的错别字/漏字（如“冷凝器力”、“素发器”、“油溫”），
+	    //      引入特征词组合模糊容错匹配，并适当放宽邻近行搜索阈值。
 	    //
 	    // 输出 key 形如 "semanticKey|中文标签"，与 DeviceOcrStrategy.yorkRoiFields 严格对齐。
 	    // 注意：motorCurrent 此处输出原始 %满载安培 数值；
@@ -387,6 +389,24 @@
 	            } else matches.last().value
 	            return cleanNum(chosen)
 	        }
+	        // 【新增】模糊容错匹配函数：针对 ML Kit 容易漏字、错字的特性进行特征组合兜底
+	        fun matchKeywords(text: String, keywords: List<String>): Boolean {
+	            for (kw in keywords) {
+	                if (text.contains(kw)) return true
+	            }
+	            // 容错处理：针对 OCR 错字/漏字现象进行特征词组合匹配
+	            // 1. 冷凝器压力被识别为"冷凝器力"（漏"压"）
+	            if (keywords.contains("冷凝器压力") && text.contains("冷凝") && (text.contains("力") || text.contains("kPa"))) return true
+	            // 2. 蒸发器压力被识别为乱码（但包含 kPa 且左半屏唯一）
+	            if (keywords.contains("蒸发器压力") && text.contains("kPa")) return true
+	            // 3. 油温被识别为"油溫"（繁体）
+	            if (keywords.contains("油温") && text.contains("油") && (text.contains("温") || text.contains("溫"))) return true
+	            // 4. 压缩机出口温度被识别为"压缩机出□温度"
+	            if (keywords.contains("压缩机出口温度") && text.contains("压缩机") && (text.contains("出") || text.contains("口") || text.contains("温度"))) return true
+	            // 5. 滑阀位置被识别为"滑阀"等
+	            if (keywords.contains("滑阀位置") && text.contains("滑阀")) return true
+	            return false
+	        }
 	        // side='L'=左半屏(蒸发器) 'R'=右半屏(冷凝器) '?'=全屏不限
 	        fun findValue(keywords: List<String>, side: Char): String? {
 	            val applySide = side != '?'
@@ -396,7 +416,8 @@
 	            for (kw in keywords) {
 	                // 第一轮：同行同时含关键字与数字
 	                for (line in candidates) {
-	                    if (line.cleaned.contains(kw)) {
+	                    // 【修改】使用模糊容错匹配
+	                    if (matchKeywords(line.cleaned, keywords)) {
 	                        val num = extractNumber(line.cleaned, kw)
 	                        if (num != null) {
 	                            DebugLogger.log(tag, "约克匹配[命中同行] 关键词=$kw side=$side 值=$num 原文=${line.text}")
@@ -405,9 +426,11 @@
 	                    }
 	                }
 	                // 第二轮：关键字行无数值 → 取该行 Y 增大方向最近的含数字行（同侧范围内）
-	                val kwLine = candidates.firstOrNull { it.cleaned.contains(kw) }
+	                // 【修改】使用模糊容错匹配寻找关键字所在行
+	                val kwLine = candidates.firstOrNull { matchKeywords(it.cleaned, keywords) }
 	                if (kwLine != null) {
-	                    val yThreshold = bitmap.height * 0.06f
+	                    // 【修改】放宽阈值至 10% 高度，避免数字行距离较远遗漏
+	                    val yThreshold = bitmap.height * 0.1f 
 	                    val nearby = candidates
 	                        .filter { it.y > kwLine.y && (it.y - kwLine.y) <= yThreshold }
 	                        .mapNotNull { ln -> cleanNum(numRegex.find(ln.cleaned)?.value ?: "")?.let { v -> ln.y to v } }
@@ -429,21 +452,21 @@
 	        )
 	        val fieldDefs = listOf(
 	            // —— 蒸发器侧（左半屏）——
-	            YorkFieldDef("evapRefPressure",   "蒸发器压力",     listOf("蒸发器蒸发压力", "蒸发压力", "蒸发器压力"), 'L'),
+	            YorkFieldDef("evapRefPressure",   "蒸发器压力",     listOf("蒸发器蒸发压力", "蒸发压力", "蒸发器压力", "kPa"), 'L'),
 	            YorkFieldDef("evapTemp",          "蒸发器饱和温度", listOf("蒸发器饱和温度", "饱和温度"), 'L'),
-	            YorkFieldDef("evapInTemp",        "冷冻水温度返回", listOf("冷冻水温度返回", "冷冻水返回", "冷冻水温度返"), 'L'),
-	            YorkFieldDef("evapOutTemp",       "冷冻水温度出水", listOf("冷冻水温度出水", "冷冻水出水", "冷冻水温度出"), 'L'),
+	            YorkFieldDef("evapInTemp",        "冷冻水温度返回", listOf("冷冻水温度返回", "冷冻水返回", "冷冻水温度返", "冷冻水"), 'L'),
+	            YorkFieldDef("evapOutTemp",       "冷冻水温度出水", listOf("冷冻水温度出水", "冷冻水出水", "冷冻水温度出", "冷冻水"), 'L'),
 	            // —— 冷凝器侧（右半屏）——
-	            YorkFieldDef("condRefPressure",   "冷凝器压力",     listOf("冷凝器冷凝压力", "冷凝压力", "冷凝器压力"), 'R'),
+	            YorkFieldDef("condRefPressure",   "冷凝器压力",     listOf("冷凝器冷凝压力", "冷凝压力", "冷凝器压力", "冷凝"), 'R'),
 	            YorkFieldDef("condTemp",          "冷凝器饱和温度", listOf("冷凝器饱和温度", "饱和温度"), 'R'),
-	            YorkFieldDef("condInTemp",        "冷却水温度返回", listOf("冷却水温度返回", "冷却水返回", "冷却水温度返"), 'R'),
-	            YorkFieldDef("condOutTemp",       "冷却水温度出水", listOf("冷却水温度出水", "冷却水出水", "冷却水温度出"), 'R'),
+	            YorkFieldDef("condInTemp",        "冷却水温度返回", listOf("冷却水温度返回", "冷却水返回", "冷却水温度返", "冷却水"), 'R'),
+	            YorkFieldDef("condOutTemp",       "冷却水温度出水", listOf("冷却水温度出水", "冷却水出水", "冷却水温度出", "冷却水"), 'R'),
 	            // —— 压缩机/电机区（整屏，通常居中或单列，不消歧）——
 	            YorkFieldDef("compOilPressure",   "油压差",         listOf("油压差", "油压"), '?'),
-	            YorkFieldDef("compOilTemp",       "油温",           listOf("油温", "油箱温度"), '?'),
-	            YorkFieldDef("compDischargeTemp", "压缩机出口温度", listOf("压缩机出口温度", "出口温度", "排口温度"), '?'),
+	            YorkFieldDef("compOilTemp",       "油温",           listOf("油温", "油箱温度", "油溫"), '?'),
+	            YorkFieldDef("compDischargeTemp", "压缩机出口温度", listOf("压缩机出口温度", "出口温度", "排口温度", "压缩机出"), '?'),
 	            YorkFieldDef("compGuideOpening",  "滑阀位置",       listOf("滑阀位置", "滑阀"), '?'),
-	            YorkFieldDef("motorCurrent",      "满载安培",       listOf("%满载安培", "满载安培"), '?')
+	            YorkFieldDef("motorCurrent",      "满载安培",       listOf("%满载安培", "满载安培", "%满载", "满载"), '?')
 	        )
 	        val results = mutableMapOf<String, String>()
 	        for (def in fieldDefs) {
