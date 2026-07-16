@@ -158,48 +158,54 @@
 	            usedNums.add(found)
 	            return found.nums.firstOrNull()
 	        }
+	        // 辅助函数：安全地写入 Map
+	        fun putResult(key: String, value: String?) {
+	            if (value != null) {
+	                results[key] = value
+	            }
+	        }
 	        // 1. 提取压力 (冷凝器左，蒸发器右，油压全屏)
 	        for (line in sortedLines) {
 	            if (line.text.contains("油") && isPressureText(line.text)) {
-	                results["compOilPressure|油压"] = getNumFromLine(line, mustHaveKpa = true) ?: findNumBelow(line.y, '?', mustHaveKpa = true)
+	                putResult("compOilPressure|油压", getNumFromLine(line, mustHaveKpa = true) ?: findNumBelow(line.y, '?', mustHaveKpa = true))
 	            }
 	            if (line.text.contains("冷凝") && isPressureText(line.text)) {
-	                results["condRefPressure|冷凝器压力"] = getNumFromLine(line, mustHaveKpa = true) ?: findNumBelow(line.y, 'L', mustHaveKpa = true)
+	                putResult("condRefPressure|冷凝器压力", getNumFromLine(line, mustHaveKpa = true) ?: findNumBelow(line.y, 'L', mustHaveKpa = true))
 	            }
 	            if ((line.text.contains("蒸发") || line.text.contains("发")) && isPressureText(line.text) && !line.text.contains("冷凝")) {
-	                results["evapRefPressure|蒸发器压力"] = getNumFromLine(line, mustHaveKpa = true) ?: findNumBelow(line.y, 'R', mustHaveKpa = true)
+	                putResult("evapRefPressure|蒸发器压力", getNumFromLine(line, mustHaveKpa = true) ?: findNumBelow(line.y, 'R', mustHaveKpa = true))
 	            }
 	        }
 	        // 2. 提取压缩机温度和饱和温度
 	        for (line in sortedLines) {
 	            if (line.text.contains("油") && isTempText(line.text)) {
-	                results["compOilTemp|油温"] = getNumFromLine(line, mustHaveC = true) ?: findNumBelow(line.y, '?', mustHaveC = true)
+	                putResult("compOilTemp|油温", getNumFromLine(line, mustHaveC = true) ?: findNumBelow(line.y, '?', mustHaveC = true))
 	            }
 	            if (line.text.contains("压缩") || line.text.contains("出口")) {
-	                results["compDischargeTemp|压缩机出口温度"] = getNumFromLine(line, mustHaveC = true) ?: findNumBelow(line.y, '?', mustHaveC = true)
+	                putResult("compDischargeTemp|压缩机出口温度", getNumFromLine(line, mustHaveC = true) ?: findNumBelow(line.y, '?', mustHaveC = true))
 	            }
 	            if (line.text.contains("冷凝") && line.text.contains("饱和")) {
-	                results["condTemp|冷凝器饱和温度"] = getNumFromLine(line, mustHaveC = true) ?: findNumBelow(line.y, 'L', mustHaveC = true)
+	                putResult("condTemp|冷凝器饱和温度", getNumFromLine(line, mustHaveC = true) ?: findNumBelow(line.y, 'L', mustHaveC = true))
 	            }
 	            if ((line.text.contains("蒸发") || line.text.contains("发")) && line.text.contains("饱和")) {
-	                results["evapTemp|蒸发器饱和温度"] = getNumFromLine(line, mustHaveC = true) ?: findNumBelow(line.y, 'R', mustHaveC = true)
+	                putResult("evapTemp|蒸发器饱和温度", getNumFromLine(line, mustHaveC = true) ?: findNumBelow(line.y, 'R', mustHaveC = true))
 	            }
 	        }
 	        // 3. 提取水温 (基于剩余的带C的数字行，按左右及Y坐标顺序归纳)
 	        val remainingTempNums = allNums.filter { it !in usedNums && isTempText(it.line.text) }
 	        val leftTemps = remainingTempNums.filter { isLeft(it.line.x) }.sortedBy { it.line.y }
 	        val rightTemps = remainingTempNums.filter { isRight(it.line.x) }.sortedBy { it.line.y }
-	        if (leftTemps.isNotEmpty()) results["condOutTemp|冷却水温度出水"] = leftTemps[0].nums.firstOrNull()
-	        if (leftTemps.size > 1) results["condInTemp|冷却水温度返回"] = leftTemps[1].nums.firstOrNull()
-	        if (rightTemps.isNotEmpty()) results["evapOutTemp|冷冻水温度出水"] = rightTemps[0].nums.firstOrNull()
-	        if (rightTemps.size > 1) results["evapInTemp|冷冻水温度返回"] = rightTemps[1].nums.firstOrNull()
+	        if (leftTemps.isNotEmpty()) putResult("condOutTemp|冷却水温度出水", leftTemps[0].nums.firstOrNull())
+	        if (leftTemps.size > 1) putResult("condInTemp|冷却水温度返回", leftTemps[1].nums.firstOrNull())
+	        if (rightTemps.isNotEmpty()) putResult("evapOutTemp|冷冻水温度出水", rightTemps[0].nums.firstOrNull())
+	        if (rightTemps.size > 1) putResult("evapInTemp|冷冻水温度返回", rightTemps[1].nums.firstOrNull())
 	        // 4. 提取滑阀和满载安培
 	        for (line in sortedLines) {
 	            if (line.text.contains("滑阀") || line.text.contains("滑")) {
-	                results["compGuideOpening|滑阀位置"] = getNumFromLine(line, mustBePureNum = true) ?: findNumBelow(line.y, '?', mustBePureNum = true)
+	                putResult("compGuideOpening|滑阀位置", getNumFromLine(line, mustBePureNum = true) ?: findNumBelow(line.y, '?', mustBePureNum = true))
 	            }
 	            if (line.text.contains("安培") || line.text.contains("满载")) {
-	                results["motorCurrent|满载安培"] = getNumFromLine(line, mustBePureNum = true) ?: findNumBelow(line.y, '?', mustBePureNum = true)
+	                putResult("motorCurrent|满载安培", getNumFromLine(line, mustBePureNum = true) ?: findNumBelow(line.y, '?', mustBePureNum = true))
 	            }
 	        }
 	        DebugLogger.log(tag, "约克最终提取结果: $results")
