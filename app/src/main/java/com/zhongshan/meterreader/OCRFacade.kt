@@ -17,6 +17,7 @@
 	import kotlinx.coroutines.Dispatchers
 	import kotlinx.coroutines.tasks.await
 	import kotlinx.coroutines.withContext
+	import kotlin.math.abs
 	enum class ImageSource { CAMERA, GALLERY }
 	object OCRFacade {
 	    /**
@@ -180,6 +181,7 @@
 	    /**
 	     * 螺杆机全图 OCR 与智能提取核心逻辑
 	     * 统一供图库识别和相机流识别调用，抛弃坐标裁剪与二值化。
+	     * 红线：特灵机组逻辑已稳定，保持原样不动。
 	     */
 	    private suspend fun extractScrewDataFromBitmap(
 	        bitmap: Bitmap,
@@ -342,7 +344,7 @@
 	        tag: String
 	    ): Map<String, String> = withContext(Dispatchers.IO) {
 	        DebugLogger.log(tag, "开始约克机组原图识别，尺寸: ${bitmap.width}x${bitmap.height}")
-	        // 【核心修复】：约克屏幕包含大量中文标签，必须使用中文识别引擎。
+	        // 【核心修复1】：约克屏幕包含大量中文标签，必须使用中文识别引擎。
 	        // 原有的 TextRecognizerOptions.DEFAULT_OPTIONS 仅支持拉丁文，会将中文识别为乱码(如将"油压差"识别为"E")。
 	        val recognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
 	        val image = InputImage.fromBitmap(bitmap, 0)
@@ -368,15 +370,10 @@
 	            DebugLogger.log(tag, "约克：未识别到任何文本行")
 	            return@withContext emptyMap()
 	        }
-	        // 屏幕左右中线（像素）：左半=蒸发器，右半=冷凝器
+	        // 【核心修复2】：屏幕左右中线（像素）：左半=蒸发器，右半=冷凝器
 	        val midX = bitmap.width / 2f
-	        // 仅对裸歧义词“饱和温度”启用左右消歧，其余关键词（含蒸发器/冷凝器前缀）全文匹配
 	        val numRegex = Regex("""-?\d+\.?\d*""")
-	        // 取数后统一清洗为“纯净数字字符串”，确保下游 TraneOcrStateManager.isValid 的
-	        // 严格相等校验 (match.value != value) 能通过——否则带 %/℃/kPa 等后缀的值会被剔除，
-	        // 导致相机自动锁定永远凑不齐票数（隐患 A）。
 	        fun cleanNum(raw: String): String? {
-	            // 优先匹配“最多2位小数”的浮点数（兼容负数），剥离任何非数字后缀
 	            val m = Regex("""-?\d{1,4}(\.\d{1,2})?""").find(raw) ?: return null
 	            return m.value
 	        }
@@ -385,16 +382,12 @@
 	            if (matches.isEmpty()) return null
 	            val kIdx = text.indexOf(keyword)
 	            val chosen: String = if (kIdx >= 0) {
-	                // 关键字右侧第一个数字优先；若右侧无，退而取最后一个数字（少数布局值在左侧）
 	                val after = matches.firstOrNull { it.range.first >= kIdx + keyword.length }
 	                after?.value ?: matches.last().value
 	            } else matches.last().value
 	            return cleanNum(chosen)
 	        }
 	        // side='L'=左半屏(蒸发器) 'R'=右半屏(冷凝器) '?'=全屏不限
-	        // 修复：消歧判定改为由调用方的 side 字段驱动，而非硬编码某关键词。
-	        //   这样蒸发/冷凝器的压力、饱和温度、冷冻水/冷却水温度 都能各自按屏幕左右栏区分，
-	        //   杜绝"冷冻水/冷却水"仅一字之差导致左右串值。
 	        fun findValue(keywords: List<String>, side: Char): String? {
 	            val applySide = side != '?'
 	            val candidates = if (applySide) {
@@ -434,10 +427,6 @@
 	            val keywords: List<String>,
 	            val side: Char
 	        )
-	        // 修复：屏幕真实布局为左右双栏——左半=蒸发器(冷冻水侧)，右半=冷凝器(冷却水侧)。
-	        //   因此 evap* 系列统一 side='L'，cond* 系列统一 side='R'，由 findValue 按屏幕中线消歧，
-	        //   彻底避免"冷冻水/冷却水"、"蒸发/冷凝"一字之差导致的左右串值。
-	        // 关键词按屏幕实际显示词(权威对应表)为准，OCR 易错字处补容错变体。
 	        val fieldDefs = listOf(
 	            // —— 蒸发器侧（左半屏）——
 	            YorkFieldDef("evapRefPressure",   "蒸发器压力",     listOf("蒸发器蒸发压力", "蒸发压力", "蒸发器压力"), 'L'),
@@ -459,8 +448,6 @@
 	        val results = mutableMapOf<String, String>()
 	        for (def in fieldDefs) {
 	            val raw = findValue(def.keywords, def.side) ?: continue
-	            // 兜底二次清洗：保证输出为 TraneOcrStateManager.isValid 能通过的“纯数字字符串”。
-	            //   motorCurrent 的 × 2.5 乘数换算由 MainActivity.buildYorkFillData 执行，此处仍存原始值。
 	            val value = cleanNum(raw) ?: raw
 	            results["${def.key}|${def.label}"] = value
 	        }
