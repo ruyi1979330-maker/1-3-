@@ -56,6 +56,35 @@ class WebViewActivity : AppCompatActivity() {
         "hostLoad" to "主机负载",
         "remark" to "螺杆机组备注"
     )
+
+    // 【本次新增-约克】约克专属字段标签字典
+    // 红线：HTML 中标签空格/命名严格对标（来自真实 HTML 提取）：
+    //   - "压缩机  油箱温度" 为两个空格，JS 的 cleanText 会去所有空白，与单空格等价 ✓
+    //   - 前缀由调用方拼 1#/2#，此处仅写"机构名 字段名"的中段
+    //   - evapInPressure/evapOutPressure/condInPressure/condOutPressure/motorVoltage 来自预设，
+    //     预设值会覆盖同 key 的 OCR 空值，故此处也需保留映射，确保预设值能填入。
+    private val yorkFieldLabelMap = mapOf(
+        "evapRefPressure"   to "蒸发器 蒸发压力",
+        "evapTemp"          to "蒸发器 蒸发温度",
+        "evapInPressure"    to "蒸发器 进口水压",
+        "evapOutPressure"   to "蒸发器 出口水压",
+        "evapInTemp"        to "蒸发器 进口水温",
+        "evapOutTemp"       to "蒸发器 出口水温",
+        "condRefPressure"   to "冷凝器 冷凝压力",
+        "condTemp"          to "冷凝器 冷凝温度",
+        "condInPressure"    to "冷凝器 进口水压",
+        "condOutPressure"   to "冷凝器 出口水压",
+        "condInTemp"        to "冷凝器 进口水温",
+        "condOutTemp"       to "冷凝器 出口水温",
+        "compOilPressure"   to "压缩机 油压",
+        "compOilTemp"       to "压缩机  油箱温度",
+        "compDischargeTemp" to "压缩机 排口温度",
+        "compGuideOpening"  to "压缩机 导液开度",
+        "motorCurrent"      to "电机 电流",
+        "motorVoltage"      to "电机 电压",
+        "remark"            to "螺杆机组（约克）备注"
+    )
+
     private val plateFieldLabelMap = mapOf(
         "inTemp" to "进水温度",
         "outTemp" to "出水温度",
@@ -150,6 +179,26 @@ class WebViewActivity : AppCompatActivity() {
                             val pumpArr = unitObj.getJSONArray("pumps")
                             for (i in 0 until pumpArr.length()) {
                                 pumps.add(pumpArr.getString(i))
+                            }
+                        }
+                    }
+                }
+            } else if (fillType == "york") {
+                // 【本次新增-约克】专属路由：使用 yorkFieldLabelMap 构建 Payload。
+                // 约克无冷冻泵（pumps 固定为空），此处不读取 pumps。
+                // root 形如 {"unit1":{...}, "unit2":{...}}，前缀固定为 1#/2#（HTML 表单无 3#）。
+                listOf("unit1" to "1#", "unit2" to "2#").forEach { (unitKey, prefix) ->
+                    if (root.has(unitKey)) {
+                        val unitObj = root.getJSONObject(unitKey)
+                        val keys = unitObj.keys()
+                        while (keys.hasNext()) {
+                            val key = keys.next()
+                            if (key == "pumps") continue
+                            val labelSuffix = yorkFieldLabelMap[key] ?: continue
+                            val fullLabel = prefix + labelSuffix
+                            val value = unitObj.getString(key)
+                            if (value.isNotEmpty()) {
+                                fields.add(Pair(fullLabel, value))
                             }
                         }
                     }
