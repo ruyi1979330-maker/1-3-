@@ -9,6 +9,7 @@ import android.widget.Toast
 import androidx.camera.core.ImageProxy
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.zhongshan.meterreader.data.DeviceTemplate
 import com.zhongshan.meterreader.util.BinarizeResourcePool
@@ -32,15 +33,20 @@ object OCRFacade {
         val side: Char  // 'L'=左侧, 'R'=右侧, '?'=全屏
     )
 
+    // 【修复1】side 方位修正：蒸发器在右侧(R)，冷凝器在左侧(L)
+    // 【修复2】增加"出水"/"返回"通用关键词，靠 side 区分冷却水/冷冻水
     private val yorkFieldDefs = listOf(
-        YorkFieldDef("evapRefPressure", FieldType.PRESSURE, listOf("蒸发器蒸发压力", "蒸发压力", "蒸发器压力"), 'L'),
-        YorkFieldDef("evapTemp", FieldType.TEMPERATURE, listOf("蒸发器饱和温度", "饱和温度"), 'L'),
-        YorkFieldDef("evapInTemp", FieldType.TEMPERATURE, listOf("冷冻水温度返回", "冷冻水返回", "冷冻水温度返"), 'L'),
-        YorkFieldDef("evapOutTemp", FieldType.TEMPERATURE, listOf("冷冻水温度出水", "冷冻水出水", "冷冻水温度出"), 'L'),
-        YorkFieldDef("condRefPressure", FieldType.PRESSURE, listOf("冷凝器冷凝压力", "冷凝压力", "冷凝器压力"), 'R'),
-        YorkFieldDef("condTemp", FieldType.TEMPERATURE, listOf("冷凝器饱和温度", "饱和温度"), 'R'),
-        YorkFieldDef("condInTemp", FieldType.TEMPERATURE, listOf("冷却水温度返回", "冷却水返回", "冷却水温度返"), 'R'),
-        YorkFieldDef("condOutTemp", FieldType.TEMPERATURE, listOf("冷却水温度出水", "冷却水出水", "冷却水温度出"), 'R'),
+        // 蒸发器侧（右侧 R）—— 原代码错误地标为 L
+        YorkFieldDef("evapRefPressure", FieldType.PRESSURE, listOf("蒸发器蒸发压力", "蒸发压力", "蒸发器压力"), 'R'),
+        YorkFieldDef("evapTemp", FieldType.TEMPERATURE, listOf("蒸发器饱和温度", "饱和温度"), 'R'),
+        YorkFieldDef("evapInTemp", FieldType.TEMPERATURE, listOf("冷冻水温度返回", "冷冻水返回", "冷冻水温度返", "冷冻水返回温度", "返回"), 'R'),
+        YorkFieldDef("evapOutTemp", FieldType.TEMPERATURE, listOf("冷冻水温度出水", "冷冻水出水", "冷冻水温度出", "冷冻水出水温度", "出水"), 'R'),
+        // 冷凝器侧（左侧 L）—— 原代码错误地标为 R
+        YorkFieldDef("condRefPressure", FieldType.PRESSURE, listOf("冷凝器冷凝压力", "冷凝压力", "冷凝器压力"), 'L'),
+        YorkFieldDef("condTemp", FieldType.TEMPERATURE, listOf("冷凝器饱和温度", "饱和温度"), 'L'),
+        YorkFieldDef("condInTemp", FieldType.TEMPERATURE, listOf("冷却水温度返回", "冷却水返回", "冷却水温度返", "冷却水返回温度", "返回"), 'L'),
+        YorkFieldDef("condOutTemp", FieldType.TEMPERATURE, listOf("冷却水温度出水", "冷却水出水", "冷却水温度出", "冷却水出水温度", "出水"), 'L'),
+        // 压缩机侧（全屏 ?）
         YorkFieldDef("compOilPressure", FieldType.PRESSURE, listOf("油压差", "油压"), '?'),
         YorkFieldDef("compOilTemp", FieldType.TEMPERATURE, listOf("油温", "油箱温度"), '?'),
         YorkFieldDef("compDischargeTemp", FieldType.TEMPERATURE, listOf("压缩机出口温度", "出口温度", "排口温度"), '?'),
@@ -185,13 +191,18 @@ object OCRFacade {
 
     /**
      * 约克机组 OCR 解析引擎
+     * 【修复1】使用中文识别器 ChineseTextRecognizerOptions 替代拉丁文识别器
+     * 【修复2】side 方位修正
+     * 【修复3】结果 key 改为 "semanticKey|label" 格式，与 buildYorkFillData 对齐
+     * 【修复4】匹配逻辑改进：关键词搜索不限制 side，取值时检查 side，双向搜索邻近行
      */
     private suspend fun extractYorkDataFromBitmap(bitmap: Bitmap, tag: String): Map<String, String> = withContext(Dispatchers.IO) {
         DebugLogger.log(tag, "开始约克机组原图识别，尺寸: ${bitmap.width}x${bitmap.height}")
-        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        // 【修复1】使用中文识别器——约克屏幕标签为中文，拉丁文识别器无法识别
+        val recognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
         val visionResult = recognizer.process(InputImage.fromBitmap(bitmap, 0)).await()
         val lines = visionResult.textBlocks.flatMap { it.lines }
-        DebugLogger.log(tag, "ML Kit 原始识别到 ${lines.size} 行文本")
+        DebugLogger.log(tag, "ML Kit(中文) 原始识别到 ${lines.size} 行文本")
 
         data class LineInfo(val y: Float, val x: Float, val text: String)
         val sortedLines = lines.mapNotNull { line ->
@@ -223,34 +234,69 @@ object OCRFacade {
             else -> true
         }
 
+        // 【修复4】改进的匹配逻辑
         for (def in yorkFieldDefs) {
             var matched = false
             for (line in sortedLines) {
-                if (!isSideMatch(def.side, line.x)) continue
+                // 不在此处检查 side —— 标签可能在任意位置
+                // （"出水"标签可能在左侧，但需要取右侧的冷冻水温度值）
+                var kwFound = false
                 for (kw in def.keywords) {
                     if (line.text.contains(kw)) {
-                        cleanNum(line.text)?.let { results[def.key] = it }
-                        DebugLogger.log(tag, "约克匹配[命中同行] 关键词=$kw side=${def.side} 值=${results[def.key]} 原文=${line.text}")
-                        matched = true
+                        kwFound = true
+                        DebugLogger.log(tag, "约克关键词命中: kw=$kw 行='${line.text}' X=${line.x.toInt()} side=${def.side}")
                         break
                     }
                 }
+                if (!kwFound) continue
+
+                // 1. 尝试从同行提取数字（检查 side）
+                val sameLineNum = cleanNum(line.text)
+                if (sameLineNum != null && (def.side == '?' || isSideMatch(def.side, line.x))) {
+                    // 【修复3】key 改为 "semanticKey|label" 格式
+                    results["${def.key}|${def.keywords[0]}"] = sameLineNum
+                    DebugLogger.log(tag, "约克匹配[命中同行] key=${def.key} 值=$sameLineNum 原文=${line.text}")
+                    matched = true
+                    break
+                }
+
+                // 2. 同行无数字或 side 不匹配，向下搜索邻近行（最多 4 行）
                 if (!matched) {
-                    // 邻近行匹配
                     val idx = sortedLines.indexOf(line)
-                    val nearby = sortedLines.getOrNull(idx + 1)
-                    if (nearby != null && isSideMatch(def.side, nearby.x)) {
-                        for (kw in def.keywords) {
-                            if (line.text.contains(kw)) {
-                                cleanNum(nearby.text)?.let { results[def.key] = it }
-                                DebugLogger.log(tag, "约克匹配[命中邻近行] 关键词=$kw side=${def.side} 值=${results[def.key]}")
+                    for (offset in 1..4) {
+                        val nearby = sortedLines.getOrNull(idx + offset) ?: break
+                        val nearbyNum = cleanNum(nearby.text)
+                        if (nearbyNum != null) {
+                            if (def.side == '?' || isSideMatch(def.side, nearby.x)) {
+                                results["${def.key}|${def.keywords[0]}"] = nearbyNum
+                                DebugLogger.log(tag, "约克匹配[命中下方第${offset}行] key=${def.key} 值=$nearbyNum")
+                                matched = true
+                                break
+                            }
+                            // side 不匹配但找到了数字，继续搜索更远的行
+                        }
+                    }
+                }
+
+                // 3. 下方未找到匹配的数字，向上搜索（最多 2 行）
+                //    用于处理"返回"标签在值之后的情况
+                if (!matched) {
+                    val idx = sortedLines.indexOf(line)
+                    for (offset in 1..2) {
+                        val nearby = sortedLines.getOrNull(idx - offset) ?: break
+                        val nearbyNum = cleanNum(nearby.text)
+                        if (nearbyNum != null) {
+                            if (def.side == '?' || isSideMatch(def.side, nearby.x)) {
+                                results["${def.key}|${def.keywords[0]}"] = nearbyNum
+                                DebugLogger.log(tag, "约克匹配[命中上方第${offset}行] key=${def.key} 值=$nearbyNum")
                                 matched = true
                                 break
                             }
                         }
                     }
                 }
-                if (matched) break
+                // 关键词已找到，无论是否提取到数字都跳出关键词循环
+                break
             }
             if (!matched) {
                 DebugLogger.log(tag, "约克匹配[未命中] keywords=${def.keywords} side=${def.side}")
