@@ -100,15 +100,30 @@
 	            withContext(Dispatchers.Main) { Toast.makeText(context, "图片加载失败", Toast.LENGTH_LONG).show() }
 	            return@withContext emptyMap()
 	        }
+	        // 【修复】限制图片最大宽度，避免大图导致 ML Kit 漏识别细节(如漏掉68%满载安培)
+	        val targetWidth = 1080
+	        val finalBitmap: Bitmap = if (bitmap.width > targetWidth) {
+	            try {
+	                val scale = targetWidth.toFloat() / bitmap.width
+	                Bitmap.createScaledBitmap(bitmap, targetWidth, (bitmap.height * scale).toInt().coerceAtLeast(1), true)
+	            } catch (e: Throwable) {
+	                bitmap
+	            }
+	        } else {
+	            bitmap
+	        }
 	        try {
 	            if (template.machineId.startsWith("york")) {
-	                return@withContext extractYorkDataFromBitmap(bitmap, "SmartOCR")
+	                return@withContext extractYorkDataFromBitmap(finalBitmap, "SmartOCR")
 	            } else if (template.isHeatExchanger) {
 	                val plateKeywordMap = TemplateManager.getPlateKeywordMap(template.roomId)
-	                return@withContext OCREngine.extractPlateData(bitmap, template.roomId == 1, plateKeywordMap)
+	                return@withContext OCREngine.extractPlateData(finalBitmap, template.roomId == 1, plateKeywordMap)
 	            }
-	            return@withContext extractScrewDataFromBitmap(bitmap, template, screenIndex, "SmartOCR")
+	            return@withContext extractScrewDataFromBitmap(finalBitmap, template, screenIndex, "SmartOCR")
 	        } finally {
+	            if (finalBitmap !== bitmap) {
+	                finalBitmap.recycle()
+	            }
 	            bitmap.recycle()
 	        }
 	    }
@@ -229,53 +244,70 @@
 	                putResult("motorCurrent|满载安培", getNumFromLine(line, mustBePureNum = true) ?: findNumBelow(line.y, '?', mustBePureNum = true))
 	            }
 	        }
-	        // 5. 百分比兜底策略 (恢复设定值锚点排除机制)
-	        // 恢复被删除的锚点过滤逻辑。利用"设定/限制"文字的 Y 坐标作为锚点，
-	        // 排除锚点附近的数字(如95)，并在锚点上方寻找满载安培、下方寻找滑阀位置。
-	        // 这样即使 OCR 漏识别了 68%，也绝不会把 95% 误填为电机电流。
+	        // 5. 百分比兜底策略 (利用设定值作为锚点，上下精准分割)
+	        fun String.containsAny(keywords: List<String>): Boolean = keywords.any { this.contains(it) }
 	        if (results["compGuideOpening|滑阀位置"] == null || results["motorCurrent|满载安培"] == null) {
-	            fun String.containsAny(keywords: List<String>): Boolean = keywords.any { this.contains(it) }
 	            val excludeKeywords = listOf("设定", "限制")
 	            // 找出包含设定/限制文字的行 Y 坐标
 	            val settingLabelYs = sortedLines.filter { it.text.containsAny(excludeKeywords) }.map { it.y }
+	            // 【新增日志】打印锚点信息
+	            DebugLogger.log(tag, "百分比兜底-寻找锚点(设定/限制): Y坐标列表=${settingLabelYs}")
 	            val percentCandidates = allNums.filter { info ->
-	                info !in usedNums &&
+	                val pass = info !in usedNums &&
 	                    isRight(info.line.x) &&
 	                    !isTempText(info.line.text) &&
 	                    !isPressureText(info.line.text) &&
 	                    !info.line.text.containsAny(excludeKeywords) &&
-	                    // 排除设定值本身的数据(如95)
 	                    !settingLabelYs.any { labelY -> info.line.y in labelY..(labelY + 30) } &&
 	                    info.nums.firstOrNull()?.let { n ->
 	                        !n.contains(".") && (n.toIntOrNull() ?: -1) in 0..100
 	                    } == true
+	                // 【新增日志】打印被过滤掉的候选
+	                if (!pass && isRight(info.line.x) && !isTempText(info.line.text) && !isPressureText(info.line.text)) {
+	                    DebugLogger.log(tag, "百分比兜底-过滤候选: Y=${info.line.y.toInt()} X=${info.line.x.toInt()} Text='${info.line.text}' Nums=${info.nums}")
+	                }
+	                pass
 	            }.sortedBy { it.line.y }
+	            // 【新增日志】打印通过的候选项
+	            percentCandidates.forEach { cand ->
+	                DebugLogger.log(tag, "百分比兜底-有效候选: Y=${cand.line.y.toInt()} X=${cand.line.x.toInt()} Text='${cand.line.text}' Nums=${cand.nums}")
+	            }
 	            if (settingLabelYs.isNotEmpty()) {
 	                val anchorY = settingLabelYs.first()
+	                DebugLogger.log(tag, "百分比兜底-使用锚点分割: anchorY=$anchorY")
 	                // 锚点上方给满载安培
 	                if (results["motorCurrent|满载安培"] == null) {
-	                    percentCandidates.lastOrNull { it.line.y < anchorY }?.let {
+	                    val currentCand = percentCandidates.lastOrNull { it.line.y < anchorY }
+	                    DebugLogger.log(tag, "百分比兜底-满载安培(锚点上方): ${if (currentCand != null) "命中 Y=${currentCand.line.y.toInt()} 值=${currentCand.nums.firstOrNull()}" else "未命中"}")
+	                    currentCand?.let {
 	                        putResult("motorCurrent|满载安培", it.nums.firstOrNull())
 	                        usedNums.add(it)
 	                    }
 	                }
 	                // 锚点下方给滑阀位置
 	                if (results["compGuideOpening|滑阀位置"] == null) {
-	                    percentCandidates.firstOrNull { it.line.y > anchorY }?.let {
+	                    val guideCand = percentCandidates.firstOrNull { it.line.y > anchorY }
+	                    DebugLogger.log(tag, "百分比兜底-滑阀位置(锚点下方): ${if (guideCand != null) "命中 Y=${guideCand.line.y.toInt()} 值=${guideCand.nums.firstOrNull()}" else "未命中"}")
+	                    guideCand?.let {
 	                        putResult("compGuideOpening|滑阀位置", it.nums.firstOrNull())
 	                        usedNums.add(it)
 	                    }
 	                }
 	            } else {
 	                // 无锚点退回原逻辑
+	                DebugLogger.log(tag, "百分比兜底-无锚点，退回原逻辑")
 	                if (results["compGuideOpening|滑阀位置"] == null) {
-	                    percentCandidates.lastOrNull { it !in usedNums }?.let {
+	                    val guideCand = percentCandidates.lastOrNull { it !in usedNums }
+	                    DebugLogger.log(tag, "百分比兜底-滑阀位置(无锚点): ${if (guideCand != null) "命中 Y=${guideCand.line.y.toInt()} 值=${guideCand.nums.firstOrNull()}" else "未命中"}")
+	                    guideCand?.let {
 	                        putResult("compGuideOpening|滑阀位置", it.nums.firstOrNull())
 	                        usedNums.add(it)
 	                    }
 	                }
 	                if (results["motorCurrent|满载安培"] == null) {
-	                    percentCandidates.firstOrNull { it !in usedNums }?.let {
+	                    val currentCand = percentCandidates.firstOrNull { it !in usedNums }
+	                    DebugLogger.log(tag, "百分比兜底-满载安培(无锚点): ${if (currentCand != null) "命中 Y=${currentCand.line.y.toInt()} 值=${currentCand.nums.firstOrNull()}" else "未命中"}")
+	                    currentCand?.let {
 	                        putResult("motorCurrent|满载安培", it.nums.firstOrNull())
 	                        usedNums.add(it)
 	                    }
