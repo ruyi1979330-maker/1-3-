@@ -185,6 +185,7 @@
 	                results[key] = value
 	            }
 	        }
+	        // 1. 提取压力 (冷凝器左，蒸发器右，油压全屏)
 	        for (line in sortedLines) {
 	            if (line.text.contains("油") && isPressureText(line.text)) {
 	                putResult("compOilPressure|油压", getNumFromLine(line, mustHaveKpa = true) ?: findNumBelow(line.y, '?', mustHaveKpa = true))
@@ -196,6 +197,7 @@
 	                putResult("evapRefPressure|蒸发器压力", getNumFromLine(line, mustHaveKpa = true) ?: findNumBelow(line.y, 'R', mustHaveKpa = true))
 	            }
 	        }
+	        // 2. 提取压缩机温度和饱和温度 (应用温度小数点修复)
 	        for (line in sortedLines) {
 	            if (line.text.contains("油") && isTempText(line.text)) {
 	                putResult("compOilTemp|油温", fixTempNum(getNumFromLine(line, mustHaveC = true) ?: findNumBelow(line.y, '?', mustHaveC = true)))
@@ -210,6 +212,7 @@
 	                putResult("evapTemp|蒸发器饱和温度", fixTempNum(getNumFromLine(line, mustHaveC = true) ?: findNumBelow(line.y, 'R', mustHaveC = true)))
 	            }
 	        }
+	        // 3. 提取水温 (基于剩余的带C的数字行，应用温度小数点修复)
 	        val remainingTempNums = allNums.filter { it !in usedNums && isTempText(it.line.text) }
 	        val leftTemps = remainingTempNums.filter { isLeft(it.line.x) }.sortedBy { it.line.y }
 	        val rightTemps = remainingTempNums.filter { isRight(it.line.x) }.sortedBy { it.line.y }
@@ -217,6 +220,7 @@
 	        if (leftTemps.size > 1) putResult("condInTemp|冷却水温度返回", fixTempNum(leftTemps[1].nums.firstOrNull()))
 	        if (rightTemps.isNotEmpty()) putResult("evapOutTemp|冷冻水温度出水", fixTempNum(rightTemps[0].nums.firstOrNull()))
 	        if (rightTemps.size > 1) putResult("evapInTemp|冷冻水温度返回", fixTempNum(rightTemps[1].nums.firstOrNull()))
+	        // 4. 提取滑阀和满载安培
 	        for (line in sortedLines) {
 	            if (line.text.contains("滑阀") || line.text.contains("滑")) {
 	                putResult("compGuideOpening|滑阀位置", getNumFromLine(line, mustBePureNum = true) ?: findNumBelow(line.y, '?', mustBePureNum = true))
@@ -225,36 +229,54 @@
 	                putResult("motorCurrent|满载安培", getNumFromLine(line, mustBePureNum = true) ?: findNumBelow(line.y, '?', mustBePureNum = true))
 	            }
 	        }
-	        // 5. 百分比兜底策略
-	        // 【修复】ML Kit 常把“设定值”的文字和数字分离为两行，导致兜底逻辑误把设定值当作满载安培。
-	        // 通过上下文关联检查，如果数字行上方有关键词“设定”或“限制”，则将其从候选名单中剔除。
-	        fun hasLineAboveContainKeyword(y: Float, keyword: String): Boolean {
-	            return sortedLines.any { it.y < y && it.y > y - 150 && it.text.contains(keyword) }
-	        }
+	        // 5. 百分比兜底策略 (利用设定值作为锚点，上下精准分割)
+	        fun String.containsAny(keywords: List<String>): Boolean = keywords.any { this.contains(it) }
 	        if (results["compGuideOpening|滑阀位置"] == null || results["motorCurrent|满载安培"] == null) {
+	            val excludeKeywords = listOf("设定", "限制")
+	            // 找出包含设定/限制文字的行 Y 坐标
+	            val settingLabelYs = sortedLines.filter { it.text.containsAny(excludeKeywords) }.map { it.y }
 	            val percentCandidates = allNums.filter { info ->
 	                info !in usedNums &&
 	                    isRight(info.line.x) &&
 	                    !isTempText(info.line.text) &&
 	                    !isPressureText(info.line.text) &&
-	                    !info.line.text.contains("设定") &&
-	                    !info.line.text.contains("限制") &&
-	                    !hasLineAboveContainKeyword(info.line.y, "设定") &&
-	                    !hasLineAboveContainKeyword(info.line.y, "限制") &&
+	                    !info.line.text.containsAny(excludeKeywords) &&
+	                    // 排除设定值本身的数据(如95)
+	                    !settingLabelYs.any { labelY -> info.line.y in labelY..(labelY + 30) } &&
 	                    info.nums.firstOrNull()?.let { n ->
 	                        !n.contains(".") && (n.toIntOrNull() ?: -1) in 0..100
 	                    } == true
 	            }.sortedBy { it.line.y }
-	            if (results["compGuideOpening|滑阀位置"] == null) {
-	                percentCandidates.lastOrNull { it !in usedNums }?.let {
-	                    putResult("compGuideOpening|滑阀位置", it.nums.firstOrNull())
-	                    usedNums.add(it)
+	            if (settingLabelYs.isNotEmpty()) {
+	                val anchorY = settingLabelYs.first()
+	                // 锚点上方给满载安培
+	                if (results["motorCurrent|满载安培"] == null) {
+	                    percentCandidates.lastOrNull { it.line.y < anchorY }?.let {
+	                        putResult("motorCurrent|满载安培", it.nums.firstOrNull())
+	                        usedNums.add(it)
+	                    }
 	                }
-	            }
-	            if (results["motorCurrent|满载安培"] == null) {
-	                percentCandidates.firstOrNull { it !in usedNums }?.let {
-	                    putResult("motorCurrent|满载安培", it.nums.firstOrNull())
-	                    usedNums.add(it)
+	                // 锚点下方给滑阀位置
+	                if (results["compGuideOpening|滑阀位置"] == null) {
+	                    percentCandidates.firstOrNull { it.line.y > anchorY }?.let {
+	                        putResult("compGuideOpening|滑阀位置", it.nums.firstOrNull())
+	                        usedNums.add(it)
+	                    }
+	                }
+	            } else {
+	                // 无锚点退回原逻辑
+	                if (results["compGuideOpening|滑阀位置"] == null) {
+	                    percentCandidates.lastOrNull()?.let {
+	                        putResult("compGuideOpening|滑阀位置", it.nums.firstOrNull())
+	                        usedNums.add(it)
+	                    }
+	                }
+	                if (results["motorCurrent|满载安培"] == null) {
+	                    val remainingCandidates = percentCandidates.filter { it !in usedNums }
+	                    if (remainingCandidates.isNotEmpty()) {
+	                        putResult("motorCurrent|满载安培", remainingCandidates.first().nums.firstOrNull())
+	                        usedNums.add(remainingCandidates.first())
+	                    }
 	                }
 	            }
 	        }
