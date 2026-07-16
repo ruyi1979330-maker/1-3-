@@ -113,32 +113,16 @@ object OCRFacade {
             withContext(Dispatchers.Main) { Toast.makeText(context, "图片加载失败", Toast.LENGTH_LONG).show() }
             return@withContext emptyMap()
         }
-        
-        // 【修复】调整缩放阈值为2000，既避免大图降级丢行，又保证文字清晰度不被过度破坏
-        val targetWidth = 2000
-        val finalBitmap: Bitmap = if (bitmap.width > targetWidth) {
-            try {
-                val scale = targetWidth.toFloat() / bitmap.width
-                Bitmap.createScaledBitmap(bitmap, targetWidth, (bitmap.height * scale).toInt().coerceAtLeast(1), true)
-            } catch (e: Throwable) {
-                bitmap
-            }
-        } else {
-            bitmap
-        }
-
+        // 【修复】彻底删除缩放逻辑，原图直出，避免 ML Kit 拆行导致大面积识别缺失
         try {
             if (template.machineId.startsWith("york")) {
-                return@withContext extractYorkDataFromBitmap(finalBitmap, "SmartOCR")
+                return@withContext extractYorkDataFromBitmap(bitmap, "SmartOCR")
             } else if (template.isHeatExchanger) {
                 val plateKeywordMap = TemplateManager.getPlateKeywordMap(template.roomId)
-                return@withContext OCREngine.extractPlateData(finalBitmap, template.roomId == 1, plateKeywordMap)
+                return@withContext OCREngine.extractPlateData(bitmap, template.roomId == 1, plateKeywordMap)
             }
-            return@withContext extractScrewDataFromBitmap(finalBitmap, template, screenIndex, "SmartOCR")
+            return@withContext extractScrewDataFromBitmap(bitmap, template, screenIndex, "SmartOCR")
         } finally {
-            if (finalBitmap !== bitmap) {
-                finalBitmap.recycle()
-            }
             bitmap.recycle()
         }
     }
@@ -267,36 +251,34 @@ object OCRFacade {
         if (rightTemps.isNotEmpty()) putResult("evapOutTemp|冷冻水温度出水", fixTempNum(rightTemps[0].nums.firstOrNull()))
         if (rightTemps.size > 1) putResult("evapInTemp|冷冻水温度返回", fixTempNum(rightTemps[1].nums.firstOrNull()))
 
-        // 4. 提取滑阀和满载安培
+        // 4. 提取滑阀和满载安培 (【关键修复】移除 findNumBelow，防止误抓下方的设定值95)
         for (line in sortedLines) {
             if (line.text.contains("滑阀") || line.text.contains("滑")) {
-                putResult("compGuideOpening|滑阀位置", getNumFromLine(line, mustBePureNum = true) ?: findNumBelow(line.y, '?', mustBePureNum = true))
+                putResult("compGuideOpening|滑阀位置", getNumFromLine(line, mustBePureNum = true))
             }
             if (line.text.contains("安培") || line.text.contains("满载")) {
-                putResult("motorCurrent|满载安培", getNumFromLine(line, mustBePureNum = true) ?: findNumBelow(line.y, '?', mustBePureNum = true))
+                putResult("motorCurrent|满载安培", getNumFromLine(line, mustBePureNum = true))
             }
         }
 
-        // 5. 百分比兜底策略 (融合锚点排除与特征引力)
+        // 5. 百分比兜底策略 (利用设定值作为锚点，上下精准分割)
         fun String.containsAny(keywords: List<String>): Boolean = keywords.any { this.contains(it) }
         if (results["compGuideOpening|滑阀位置"] == null || results["motorCurrent|满载安培"] == null) {
-            val excludeKeywords = listOf("设定", "限制", "限值")
+            val excludeKeywords = listOf("设定", "限制")
             // 找出包含设定/限制文字的行 Y 坐标
             val settingLabelYs = sortedLines.filter { it.text.containsAny(excludeKeywords) }.map { it.y }
             DebugLogger.log(tag, "百分比兜底-寻找锚点(设定/限制): Y坐标列表=${settingLabelYs}")
 
-            // 放宽小数点限制 (借鉴 Gemini 建议，允许 68.5 这样的值)
             val percentCandidates = allNums.filter { info ->
                 val pass = info !in usedNums &&
                     isRight(info.line.x) &&
                     !isTempText(info.line.text) &&
                     !isPressureText(info.line.text) &&
                     !info.line.text.containsAny(excludeKeywords) &&
-                    // 核心防线：排除锚点文字下方 30 像素内的数字行(如95)
+                    // 排除设定值本身的数据(如95)
                     !settingLabelYs.any { labelY -> info.line.y in labelY..(labelY + 30) } &&
                     info.nums.firstOrNull()?.let { n ->
-                        val v = n.toFloatOrNull()
-                        v != null && v in 0f..100f // 允许浮点数
+                        !n.contains(".") && (n.toIntOrNull() ?: -1) in 0..100
                     } == true
                 if (!pass && isRight(info.line.x) && !isTempText(info.line.text) && !isPressureText(info.line.text)) {
                     DebugLogger.log(tag, "百分比兜底-过滤候选: Y=${info.line.y.toInt()} X=${info.line.x.toInt()} Text='${info.line.text}' Nums=${info.nums}")
@@ -330,33 +312,21 @@ object OCRFacade {
                     }
                 }
             } else {
-                // 无锚点退回特征引力逻辑 (借鉴 Gemini 建议)
-                DebugLogger.log(tag, "百分比兜底-无锚点，退回特征引力逻辑")
-                if (results["motorCurrent|满载安培"] == null) {
-                    val bestCurrent = percentCandidates.filter { it !in usedNums }.maxByOrNull { info ->
-                        var score = 0f
-                        val txt = info.line.text.lowercase()
-                        if (txt.contains("%")) score += 50f
-                        if (txt.contains("满载") || txt.contains("安培")) score += 100f
-                        score - info.line.y * 0.01f // Y轴偏上给予轻微权重
-                    }
-                    DebugLogger.log(tag, "百分比兜底-满载安培(特征引力): ${if (bestCurrent != null) "命中 Y=${bestCurrent.line.y.toInt()} 值=${bestCurrent.nums.firstOrNull()}" else "未命中"}")
-                    bestCurrent?.let {
-                        putResult("motorCurrent|满载安培", it.nums.firstOrNull())
+                // 无锚点退回原逻辑
+                DebugLogger.log(tag, "百分比兜底-无锚点，退回原逻辑")
+                if (results["compGuideOpening|滑阀位置"] == null) {
+                    val guideCand = percentCandidates.lastOrNull { it !in usedNums }
+                    DebugLogger.log(tag, "百分比兜底-滑阀位置(无锚点): ${if (guideCand != null) "命中 Y=${guideCand.line.y.toInt()} 值=${guideCand.nums.firstOrNull()}" else "未命中"}")
+                    guideCand?.let {
+                        putResult("compGuideOpening|滑阀位置", it.nums.firstOrNull())
                         usedNums.add(it)
                     }
                 }
-                if (results["compGuideOpening|滑阀位置"] == null) {
-                    val bestGuide = percentCandidates.filter { it !in usedNums }.maxByOrNull { info ->
-                        var score = 0f
-                        val txt = info.line.text.lowercase()
-                        if (txt.contains("%")) score += 50f
-                        if (txt.contains("滑阀") || txt.contains("滑")) score += 100f
-                        score + info.line.y * 0.01f // Y轴偏下给予轻微权重
-                    }
-                    DebugLogger.log(tag, "百分比兜底-滑阀位置(特征引力): ${if (bestGuide != null) "命中 Y=${bestGuide.line.y.toInt()} 值=${bestGuide.nums.firstOrNull()}" else "未命中"}")
-                    bestGuide?.let {
-                        putResult("compGuideOpening|滑阀位置", it.nums.firstOrNull())
+                if (results["motorCurrent|满载安培"] == null) {
+                    val currentCand = percentCandidates.firstOrNull { it !in usedNums }
+                    DebugLogger.log(tag, "百分比兜底-满载安培(无锚点): ${if (currentCand != null) "命中 Y=${currentCand.line.y.toInt()} 值=${currentCand.nums.firstOrNull()}" else "未命中"}")
+                    currentCand?.let {
+                        putResult("motorCurrent|满载安培", it.nums.firstOrNull())
                         usedNums.add(it)
                     }
                 }
