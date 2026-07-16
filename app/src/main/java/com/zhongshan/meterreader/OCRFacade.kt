@@ -1,3 +1,4 @@
+
 // 文件名: OCRFacade.kt
 package com.zhongshan.meterreader
 
@@ -142,7 +143,18 @@ object OCRFacade {
             LineInfo(box.exactCenterY(), box.exactCenterX(), line.text.trim())
         }.sortedBy { it.y }
 
-        if (sortedLines.isEmpty()) return@withContext emptyMap()
+        // 【修复-可观测性】补回按 Y 排序后的逐行原始文本日志（此前重构时被去掉了）。
+        // 没有这份逐行日志，"满载安培到底有没有被 ML Kit 识别到"这类问题只能靠猜；
+        // 有了它，下次导出日志能直接看到具体是哪一行、识别成了什么文本。
+        DebugLogger.log(tag, "--- 约克 按Y排序后文本行 ---")
+        sortedLines.forEachIndexed { idx, l ->
+            DebugLogger.log(tag, "约克行[$idx] Y=${l.y.toInt()} X=${l.x.toInt()} Text=${l.text}")
+        }
+
+        if (sortedLines.isEmpty()) {
+            DebugLogger.log(tag, "约克：未识别到任何文本行")
+            return@withContext emptyMap()
+        }
 
         val centerX = bitmap.width / 2f
         data class NumInfo(val line: LineInfo, val nums: List<String>)
@@ -160,12 +172,19 @@ object OCRFacade {
         fun isPressureText(text: String) = text.lowercase().contains("kpa")
 
         // 智能修复丢失的小数点 (例如 439C -> 43.9C， 78C -> 7.8C)
+        // 【修复】原来用"数值>50"判断是否需要补小数点，导致蒸发器饱和温度这类本来就
+        // 常年在个位数~十位数（如 3.0°C 被读成 30）的读数永远触发不了修复。本屏幕所有
+        // 温度字段固定只显示1位小数，只要 OCR 把小数点整个漏读了，数字本身的每一位
+        // 都还在、只是小数点消失，与数值大小无关，所以改成：只要没有小数点、且至少有
+        // 2位数字，就统一在末位前补上小数点；不再按量级判断。
         fun fixTempNum(numStr: String?): String? {
             if (numStr == null) return null
+            if (numStr.contains(".")) return numStr
             return try {
-                val num = numStr.toDouble()
-                if (num > 50.0 && !numStr.contains(".")) {
-                    String.format("%.1f", num / 10.0)
+                numStr.toDouble() // 仅用于校验这确实是个合法数字，校验失败走 catch 原样返回
+                if (numStr.replace("-", "").length >= 2) {
+                    val insertAt = numStr.length - 1
+                    numStr.substring(0, insertAt) + "." + numStr.substring(insertAt)
                 } else {
                     numStr
                 }
@@ -251,19 +270,38 @@ object OCRFacade {
             }
         }
 
-        // 5. 百分比兜底策略：如果滑阀或满载安培没提取到，从带%的数字中按Y坐标从下往上取
+        // 5. 百分比兜底策略
+        // 【修复】原策略要求候选行必须含字面"%"，但实测 ML Kit 在本机型上经常把"%"
+        // 读丢或读错（"电流限制设定值95%"被读成"95 2"，"滑阀位置82%"干脆读成裸数字
+        // "82"、连"滑阀位置"四个字都没识别到），导致 percentNums 经常是空的，兜底形同虚设。
+        // 改为不再要求"%"，只要求：不含小数点的纯整数、数值落在 0-100 合理区间、且在
+        // 屏幕右侧（%满载安培/电流限制设定值/滑阀位置三者原本就同列于右上角，从上到下
+        // 依次为 满载安培→电流限制设定值→滑阀位置）。
+        // 同时修正原代码里 percentNums[1] 的下标错位：按 Y 降序时 [0]=最下面=滑阀位置没错，
+        // 但 [1] 实际是中间的"电流限制设定值"而不是满载安培，会把 95 误填进电流字段。
+        // 现在改为排序后取"首尾"（最上面给满载安培、最下面给滑阀位置），不用假设候选
+        // 数量正好是 2 或 3 个，中间那条"电流限制设定值"有没有被识别到都不影响取值。
         if (results["compGuideOpening|滑阀位置"] == null || results["motorCurrent|满载安培"] == null) {
-            val percentNums = allNums.filter { it.line.text.contains("%") && it !in usedNums }.sortedByDescending { it.line.y }
-            if (percentNums.isNotEmpty()) {
-                // 最下方的 % 通常是滑阀位置
-                if (results["compGuideOpening|滑阀位置"] == null) {
-                    putResult("compGuideOpening|滑阀位置", percentNums[0].nums.firstOrNull())
-                    usedNums.add(percentNums[0])
+            val percentCandidates = allNums.filter { info ->
+                info !in usedNums &&
+                    isRight(info.line.x) &&
+                    !isTempText(info.line.text) &&
+                    !isPressureText(info.line.text) &&
+                    info.nums.firstOrNull()?.let { n ->
+                        !n.contains(".") && (n.toIntOrNull() ?: -1) in 0..100
+                    } == true
+            }.sortedBy { it.line.y }
+
+            if (results["compGuideOpening|滑阀位置"] == null) {
+                percentCandidates.lastOrNull { it !in usedNums }?.let {
+                    putResult("compGuideOpening|滑阀位置", it.nums.firstOrNull())
+                    usedNums.add(it)
                 }
-                // 倒数第二个 % 通常是满载安培 (最上方的是设定值95%)
-                if (percentNums.size > 1 && results["motorCurrent|满载安培"] == null) {
-                    putResult("motorCurrent|满载安培", percentNums[1].nums.firstOrNull())
-                    usedNums.add(percentNums[1])
+            }
+            if (results["motorCurrent|满载安培"] == null) {
+                percentCandidates.firstOrNull { it !in usedNums }?.let {
+                    putResult("motorCurrent|满载安培", it.nums.firstOrNull())
+                    usedNums.add(it)
                 }
             }
         }
