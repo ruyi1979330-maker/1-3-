@@ -100,15 +100,30 @@
 	            withContext(Dispatchers.Main) { Toast.makeText(context, "图片加载失败", Toast.LENGTH_LONG).show() }
 	            return@withContext emptyMap()
 	        }
+	        // 【修复1-治本】限制图片最大宽度，避免大图导致 ML Kit 漏识别细节(如漏掉68%满载安培)
+	        val targetWidth = 1080
+	        val finalBitmap: Bitmap = if (bitmap.width > targetWidth) {
+	            try {
+	                val scale = targetWidth.toFloat() / bitmap.width
+	                Bitmap.createScaledBitmap(bitmap, targetWidth, (bitmap.height * scale).toInt().coerceAtLeast(1), true)
+	            } catch (e: Throwable) {
+	                bitmap
+	            }
+	        } else {
+	            bitmap
+	        }
 	        try {
 	            if (template.machineId.startsWith("york")) {
-	                return@withContext extractYorkDataFromBitmap(bitmap, "SmartOCR")
+	                return@withContext extractYorkDataFromBitmap(finalBitmap, "SmartOCR")
 	            } else if (template.isHeatExchanger) {
 	                val plateKeywordMap = TemplateManager.getPlateKeywordMap(template.roomId)
-	                return@withContext OCREngine.extractPlateData(bitmap, template.roomId == 1, plateKeywordMap)
+	                return@withContext OCREngine.extractPlateData(finalBitmap, template.roomId == 1, plateKeywordMap)
 	            }
-	            return@withContext extractScrewDataFromBitmap(bitmap, template, screenIndex, "SmartOCR")
+	            return@withContext extractScrewDataFromBitmap(finalBitmap, template, screenIndex, "SmartOCR")
 	        } finally {
+	            if (finalBitmap !== bitmap) {
+	                finalBitmap.recycle()
+	            }
 	            bitmap.recycle()
 	        }
 	    }
@@ -229,9 +244,12 @@
 	                putResult("motorCurrent|满载安培", getNumFromLine(line, mustBePureNum = true) ?: findNumBelow(line.y, '?', mustBePureNum = true))
 	            }
 	        }
-	        // 5. 百分比兜底策略 (利用设定值作为锚点，上下精准分割)
-	        fun String.containsAny(keywords: List<String>): Boolean = keywords.any { this.contains(it) }
+	        // 5. 百分比兜底策略 (恢复设定值锚点排除机制)
+	        // 【修复2-治标】恢复被删除的锚点过滤逻辑。利用"设定/限制"文字的 Y 坐标作为锚点，
+	        // 排除锚点附近的数字(如95)，并在锚点上方寻找满载安培、下方寻找滑阀位置。
+	        // 这样即使 OCR 漏识别了 68%，也绝不会把 95% 误填为电机电流。
 	        if (results["compGuideOpening|滑阀位置"] == null || results["motorCurrent|满载安培"] == null) {
+	            fun String.containsAny(keywords: List<String>): Boolean = keywords.any { this.contains(it) }
 	            val excludeKeywords = listOf("设定", "限制")
 	            // 找出包含设定/限制文字的行 Y 坐标
 	            val settingLabelYs = sortedLines.filter { it.text.containsAny(excludeKeywords) }.map { it.y }
@@ -266,16 +284,15 @@
 	            } else {
 	                // 无锚点退回原逻辑
 	                if (results["compGuideOpening|滑阀位置"] == null) {
-	                    percentCandidates.lastOrNull()?.let {
+	                    percentCandidates.lastOrNull { it !in usedNums }?.let {
 	                        putResult("compGuideOpening|滑阀位置", it.nums.firstOrNull())
 	                        usedNums.add(it)
 	                    }
 	                }
 	                if (results["motorCurrent|满载安培"] == null) {
-	                    val remainingCandidates = percentCandidates.filter { it !in usedNums }
-	                    if (remainingCandidates.isNotEmpty()) {
-	                        putResult("motorCurrent|满载安培", remainingCandidates.first().nums.firstOrNull())
-	                        usedNums.add(remainingCandidates.first())
+	                    percentCandidates.firstOrNull { it !in usedNums }?.let {
+	                        putResult("motorCurrent|满载安培", it.nums.firstOrNull())
+	                        usedNums.add(it)
 	                    }
 	                }
 	            }
