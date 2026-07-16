@@ -101,6 +101,25 @@ class MainActivity : AppCompatActivity() {
                             "【$labelName】：$v"
                         }
                     Toast.makeText(this@MainActivity, "数据已识别完成！请核对后点击填表", Toast.LENGTH_LONG).show()
+                } else if (selectedTemplate?.machineId?.startsWith("york") == true) {
+                    // 【本次新增-约克】单屏识别：仅取第一张图，screenIndex 固定 0。
+                    currentScreenIndex = 0
+                    val uri = uris[0]
+                    val result = OCRFacade.performSmartOcr(
+                        this@MainActivity, uri, selectedTemplate!!,
+                        currentScreenIndex, ImageSource.GALLERY, binarizePool
+                    )
+                    if (result.isNotEmpty()) {
+                        RecognitionResultHolder.saveFieldsForMachine(selectedTemplate!!.machineId, result)
+                    }
+                    val aggregatedData = RecognitionResultHolder.getFieldsForMachine(selectedTemplate!!.machineId)
+                    binding.tvDataPreview.text = aggregatedData.entries
+                        .sortedBy { it.key }
+                        .joinToString("\n") { (k, v) ->
+                            val labelName = if (k.contains("|")) k.split("|")[1] else k
+                            "【$labelName】：$v"
+                        }
+                    Toast.makeText(this@MainActivity, "约克数据已识别完成！请核对后点击填表", Toast.LENGTH_LONG).show()
                 } else {
                     processImageSuspend(uris[0], ImageSource.GALLERY)
                 }
@@ -211,8 +230,12 @@ class MainActivity : AppCompatActivity() {
         binding.btnGallery.setOnClickListener {
             if (!isProcessing) {
                 val template = selectedTemplate
-                if (template?.machineId in listOf("screw_1", "screw_2", "screw_3")) {
-                    Toast.makeText(this, "请选择3张照片（蒸发器、冷凝器、压缩机）", Toast.LENGTH_SHORT).show()
+                // 【本次新增-约克】单屏采集提示
+                when {
+                    template?.machineId in listOf("screw_1", "screw_2", "screw_3") ->
+                        Toast.makeText(this, "请选择3张照片（蒸发器、冷凝器、压缩机）", Toast.LENGTH_SHORT).show()
+                    template?.machineId?.startsWith("york") == true ->
+                        Toast.makeText(this, "请选择1张约克机组全数据屏幕照片", Toast.LENGTH_SHORT).show()
                 }
                 galleryPickLauncher.launch("image/*")
             }
@@ -265,6 +288,26 @@ class MainActivity : AppCompatActivity() {
                         RecognitionResultHolder.clearMachineData("screw_1")
                         RecognitionResultHolder.clearMachineData("screw_2")
                         RecognitionResultHolder.clearMachineData("screw_3")
+                        withContext(Dispatchers.Main) { binding.tvDataPreview.text = "待采集..." }
+                    } else if (template.machineId.startsWith("york")) {
+                        // 【本次新增-约克】路由：调用独立 buildYorkFillData()。
+                        // 约克两台机各自一张屏，一次提交同时填 unit1/unit2。
+                        val data1 = RecognitionResultHolder.getFieldsForMachine("york_1")
+                        val data2 = RecognitionResultHolder.getFieldsForMachine("york_2")
+                        if (data1.isEmpty() && data2.isEmpty()) {
+                            Toast.makeText(this@MainActivity, "暂无采集数据", Toast.LENGTH_SHORT).show()
+                            return@launch
+                        }
+                        val fillData = buildYorkFillData()
+                        val intent = Intent(this@MainActivity, WebViewActivity::class.java).apply {
+                            putExtra("EXTRA_URL", template.formUrl)
+                            putExtra("EXTRA_TAB_NAME", TemplateManager.getTabName(template))
+                            putExtra("EXTRA_FILL_DATA_JSON", fillData.toString())
+                            putExtra("EXTRA_FILL_TYPE", "york")
+                        }
+                        startActivity(intent)
+                        RecognitionResultHolder.clearMachineData("york_1")
+                        RecognitionResultHolder.clearMachineData("york_2")
                         withContext(Dispatchers.Main) { binding.tvDataPreview.text = "待采集..." }
                     } else if (template.isHeatExchanger) {
                         val cachedData = RecognitionResultHolder.getFieldsForMachine(template.machineId)
@@ -487,7 +530,13 @@ class MainActivity : AppCompatActivity() {
     private fun updateScreenProgress() {
         val template = selectedTemplate ?: return
         val total = DeviceOcrStrategy.totalScreens(template.machineId)
-        if (template.isHeatExchanger || total <= 1) return
+        if (template.isHeatExchanger || total <= 1) {
+            // 【本次新增-约克】单屏设备（total <= 1）提供单屏文本提示
+            if (template.machineId.startsWith("york")) {
+                binding.tvDataPreview.text = "约克机组为单屏识别，请将屏幕对准黄框或点击图库选择1张照片"
+            }
+            return
+        }
         if (template.machineId in listOf("screw_1", "screw_2", "screw_3")) {
             binding.tvDataPreview.text = "请点击图库，一次选择3张设备屏幕照片"
             return
@@ -573,6 +622,87 @@ class MainActivity : AppCompatActivity() {
             "主机负载", "%RLA" -> "hostLoad"
             else -> null
         }
+    }
+
+    // =====================================================================
+    // 【本次新增-约克】约克填表 JSON 构建（与特灵 buildScrewFillData 完全隔离）
+    //
+    // 约克专有业务规则：
+    //   1) 无冷冻泵：unitJson.put("pumps", JSONArray()) —— 强行压入空数组屏蔽冷冻泵逻辑；
+    //   2) motorCurrent 乘数拦截：APP表单[电机电流] = OCR[%满载安培] × 2.5，结果保留 1 位小数；
+    //   3) remark 固定为空字符串 ""。
+    //
+    // OCR 输出 key 形如 "motorCurrent|满载安培"，本方法按 "|" 拆分取语义 key。
+    // =====================================================================
+    private suspend fun buildYorkFillData(): JSONObject {
+        val root = JSONObject()
+        root.put("operator", "")
+        // 与 OCR 输出语义 key 一一对应（电机电压由预设注入，不在 OCR 列）
+        val allYorkKeys = listOf(
+            "evapRefPressure", "evapTemp", "evapInPressure", "evapOutPressure",
+            "evapInTemp", "evapOutTemp",
+            "condRefPressure", "condTemp", "condInPressure", "condOutPressure",
+            "condInTemp", "condOutTemp",
+            "compOilPressure", "compOilTemp", "compDischargeTemp", "compGuideOpening",
+            "motorCurrent", "motorVoltage"
+        )
+        // unit1 → york_1，unit2 → york_2（HTML 表单前缀为 1#/2#，无 3#）
+        for (unitNo in 1..2) {
+            val machineId = "york_$unitNo"
+            val cachedData = RecognitionResultHolder.getFieldsForMachine(machineId)
+            if (cachedData.isEmpty()) continue
+
+            // 1) 先用 OCR 值打底
+            val unitData = mutableMapOf<String, String>()
+            for (key in allYorkKeys) unitData[key] = ""
+            var hasRealData = false
+            for ((compoundKey, value) in cachedData) {
+                val parts = compoundKey.split("|")
+                if (parts.size != 2) continue
+                val semanticKey = parts[0]
+                if (semanticKey in allYorkKeys && value.isNotEmpty()) {
+                    unitData[semanticKey] = value
+                    hasRealData = true
+                }
+            }
+            if (!hasRealData) continue
+
+            // 2) 再用约克独立预设覆盖（进出水压 4 项 + 电机电压 1 项）
+            val presets = PresetManager.getPresetsForMachine(machineId)
+            for ((fieldIdWithLabel, value) in presets) {
+                val parts = fieldIdWithLabel.split("|")
+                if (parts.size != 2) continue
+                val semanticKey = parts[0]
+                if (semanticKey in allYorkKeys && value.isNotEmpty()) {
+                    unitData[semanticKey] = value
+                }
+            }
+
+            val unitJson = JSONObject()
+            for ((k, v) in unitData) {
+                if (k == "motorCurrent") {
+                    // 乘数拦截：%满载安培 × 2.5，保留 1 位小数；解析失败则原样透传。
+                    val multiplied = runCatching {
+                        val raw = v.toFloat()
+                        val result = raw * 2.5f
+                        // 四舍五入保留 1 位小数
+                        String.format("%.1f", result)
+                    }.getOrNull() ?: v
+                    unitJson.put(k, multiplied)
+                } else {
+                    unitJson.put(k, v)
+                }
+            }
+            // 强行压入空数组，屏蔽冷冻泵勾选逻辑
+            unitJson.put("pumps", JSONArray())
+            unitJson.put("remark", "")
+
+            when (unitNo) {
+                1 -> root.put("unit1", unitJson)
+                2 -> root.put("unit2", unitJson)
+            }
+        }
+        return root
     }
 
     private fun buildPlateFillData(machineId: String, cachedData: Map<String, String>): JSONObject {
