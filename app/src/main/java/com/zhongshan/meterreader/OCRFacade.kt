@@ -333,6 +333,55 @@ object OCRFacade {
             }
         }
 
+        // 6.【新增-二次探测】满载安培主流程仍未命中时的兜底
+        // 走到这里说明：不是过滤条件挑剔——上面"百分比兜底"那段日志能看到，
+        // 锚点上方的候选池里除了日期时间那一行（被小数点规则正确排除）就再没有
+        // 别的数字了，也就是 ML Kit 在整图这个分辨率下压根没把"%满载安培"这几个
+        // 字识别成文本。整图层面的匹配规则不可能把没识别到的字变出来，只能在
+        // "提高这一小块区域的有效分辨率"上想办法：以已经定位到的"设定/限制"
+        // 锚点为基准，往上裁一条较窄的区域，放大后单独再送一次 ML Kit 识别。
+        // 只在图库(SmartOCR)这一次性识别时做，不放进实时相机流，避免拖慢取景响应。
+        if (tag == "SmartOCR" && results["motorCurrent|满载安培"] == null) {
+            val anchorYForRetry = sortedLines.firstOrNull { it.text.containsAny(listOf("设定", "限制")) }?.y
+            if (anchorYForRetry == null) {
+                DebugLogger.log(tag, "满载安培-二次探测跳过: 未找到设定/限制锚点，无法定位裁剪区域")
+            } else {
+                var croppedBmp: Bitmap? = null
+                var zoomedBmp: Bitmap? = null
+                try {
+                    // 裁剪范围：锚点上方 12% 图高 ~ 锚点下方 2% 图高，覆盖到"满载安培"
+                    // 大概率所在的那一条，同时留出余量防止行间距估计有偏差
+                    val top = (anchorYForRetry - bitmap.height * 0.12f).coerceAtLeast(0f).toInt()
+                    val bottom = (anchorYForRetry + bitmap.height * 0.02f).coerceAtMost(bitmap.height.toFloat()).toInt()
+                    val left = centerX.toInt().coerceIn(0, bitmap.width - 1)
+                    val cropW = (bitmap.width - left).coerceAtLeast(1)
+                    val cropH = (bottom - top).coerceAtLeast(1)
+                    if (cropW > 4 && cropH > 4) {
+                        croppedBmp = Bitmap.createBitmap(bitmap, left, top, cropW, cropH)
+                        val scale = 3f
+                        zoomedBmp = Bitmap.createScaledBitmap(croppedBmp, (cropW * scale).toInt(), (cropH * scale).toInt(), true)
+                        DebugLogger.log(tag, "满载安培-二次探测: 裁剪(left=$left top=$top w=$cropW h=$cropH) 放大${scale}倍后=${zoomedBmp.width}x${zoomedBmp.height}")
+                        val retryLines = recognizer.process(InputImage.fromBitmap(zoomedBmp, 0)).await().textBlocks.flatMap { it.lines }
+                        retryLines.forEach { DebugLogger.log(tag, "满载安培-二次探测行: Text=${it.text}") }
+                        val retryNum = retryLines
+                            .flatMap { l -> Regex("""-?\d{1,4}(\.\d{1,2})?""").findAll(l.text).map { m -> m.value } }
+                            .firstOrNull { n -> !n.contains(".") && (n.toIntOrNull() ?: -1) in 0..100 }
+                        if (retryNum != null) {
+                            DebugLogger.log(tag, "满载安培-二次探测命中: 值=$retryNum")
+                            putResult("motorCurrent|满载安培", retryNum)
+                        } else {
+                            DebugLogger.log(tag, "满载安培-二次探测仍未命中，建议靠近重拍这个角或人工填写")
+                        }
+                    }
+                } catch (e: Throwable) {
+                    DebugLogger.log(tag, "满载安培-二次探测异常: ${e.javaClass.simpleName} ${e.message}")
+                } finally {
+                    try { croppedBmp?.let { if (!it.isRecycled) it.recycle() } } catch (_: Throwable) {}
+                    try { zoomedBmp?.let { if (!it.isRecycled) it.recycle() } } catch (_: Throwable) {}
+                }
+            }
+        }
+
         DebugLogger.log(tag, "约克最终提取结果: $results")
         return@withContext results
     }
