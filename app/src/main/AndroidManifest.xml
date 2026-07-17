@@ -34,6 +34,11 @@
             android:name=".RoiConfigActivity"
             android:screenOrientation="portrait" />
 
+        <!-- ===== 新增：uCrop 裁剪 Activity ===== -->
+        <activity
+            android:name="com.yalantis.ucrop.UCropActivity"
+            android:theme="@style/Theme.MeterReader.NoActionBar" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
