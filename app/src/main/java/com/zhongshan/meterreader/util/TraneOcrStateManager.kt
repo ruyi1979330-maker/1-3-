@@ -13,12 +13,21 @@ object TraneOcrStateManager {
     private val lockedFields = mutableMapOf<String, String>()
     private var onSuccessCallback: ((Map<String, String>) -> Unit)? = null
     private var requiredFields: List<String> = emptyList()
+    // 触发比例：1.0 = 全部字段锁定才触发（向后兼容默认值）；
+    // <1.0（如 0.8）= 已锁定字段比例达到该值即触发，用于字段较多的机组（约克单屏 13 字段）。
+    private var triggerRatio: Float = 1.0f
 
-    fun init(requiredFields: List<String>, callback: (Map<String, String>) -> Unit) {
+    fun init(
+        requiredFields: List<String>,
+        callback: (Map<String, String>) -> Unit,
+        triggerRatio: Float = 1.0f
+    ) {
         this.requiredFields = requiredFields
+        // 防御性约束：仅接受 (0,1]，避免传 0 或负数导致永远不触发
+        this.triggerRatio = if (triggerRatio > 0f && triggerRatio <= 1f) triggerRatio else 1.0f
         this.onSuccessCallback = callback
         reset()
-        DebugLogger.log("StateMach-Debug", "状态机初始化，必需字段: $requiredFields")
+        DebugLogger.log("StateMach-Debug", "状态机初始化，必需字段数=${requiredFields.size}, 触发比例=${this.triggerRatio}, 必需字段: $requiredFields")
     }
 
     fun reset() {
@@ -64,8 +73,22 @@ object TraneOcrStateManager {
 
         DebugLogger.log("StateMach-Debug", "当前已锁定字段数: ${lockedFields.size}/${requiredFields.size}, 锁定内容: $lockedFields")
 
-        if (lockedFields.keys.containsAll(requiredFields)) {
-            DebugLogger.log("StateMach-Debug", "所有必需字段已锁定，触发成功回调！")
+        // 触发判定：
+        // - triggerRatio == 1.0：要求所有必需字段全部锁定（向后兼容，screw 机组沿用此行为）。
+        // - triggerRatio < 1.0：已锁定字段数 / 必需字段数 >= triggerRatio 即触发，
+        //   用于字段较多的机组（约克 13 字段单屏，OCR 难以保证全部稳定锁定）。
+        // requiredFields 为空时不应触发（init 时不该为空，但作防御）。
+        val shouldTrigger = if (requiredFields.isEmpty()) {
+            false
+        } else if (triggerRatio >= 1.0f) {
+            lockedFields.keys.containsAll(requiredFields)
+        } else {
+            val lockedInRequired = requiredFields.count { it in lockedFields }
+            lockedInRequired.toFloat() / requiredFields.size >= triggerRatio
+        }
+
+        if (shouldTrigger) {
+            DebugLogger.log("StateMach-Debug", "触发条件已满足，触发成功回调！(已锁定=${lockedFields.size}/${requiredFields.size}, 比例=$triggerRatio)")
             onSuccessCallback?.invoke(lockedFields.toMap())
             reset()
         }
