@@ -214,7 +214,9 @@ object OCRFacade {
         // 1. 提取压力 (冷凝器左，蒸发器右，油压全屏)
         for (line in sortedLines) {
             if (line.text.contains("油") && isPressureText(line.text)) {
-                putResult("compOilPressure|油压", getNumFromLine(line, mustHaveKpa = true) ?: findNumBelow(line.y, '?', mustHaveKpa = true))
+                // 标签必须为"油压差"，与 DeviceOcrStrategy.yorkRoiFields 的 requiredFields 严格对齐
+                // 否则相机流模式下 TraneOcrStateManager 的 containsAll 判定永远失败，采集永不触发
+                putResult("compOilPressure|油压差", getNumFromLine(line, mustHaveKpa = true) ?: findNumBelow(line.y, '?', mustHaveKpa = true))
             }
             if (line.text.contains("冷凝") && isPressureText(line.text)) {
                 putResult("condRefPressure|冷凝器压力", getNumFromLine(line, mustHaveKpa = true) ?: findNumBelow(line.y, 'L', mustHaveKpa = true))
