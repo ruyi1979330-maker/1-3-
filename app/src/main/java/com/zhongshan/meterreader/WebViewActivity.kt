@@ -32,6 +32,7 @@ class WebViewActivity : AppCompatActivity() {
     private val pageLoadGeneration = AtomicInteger(0)
     private val isFillDone = AtomicBoolean(false)
     @Volatile private var isActivityDestroyed = false
+    @Volatile private var hasLoadedRealUrl = false
 
     // 统一的中文请求头，引导服务端优先返回中文内容
     private val zhHeaders = mapOf("Accept-Language" to "zh-CN,zh;q=0.9")
@@ -138,10 +139,12 @@ class WebViewActivity : AppCompatActivity() {
         val (targetFields, pumpList) = parseFillData(fillType, fillDataJson)
         fillJsPayload = compileFillJs(targetFields, pumpList, tabName)
         initWebView()
+        hasLoadedRealUrl = false
         binding.webView.loadUrl("about:blank")
         if (targetUrl.isNotEmpty()) {
             binding.webView.post {
                 if (!isActivityDestroyed && targetUrl.isNotEmpty()) {
+                    hasLoadedRealUrl = true
                     // Q2 修复：附加中文请求头，引导服务端返回中文页面
                     binding.webView.loadUrl(targetUrl, zhHeaders)
                 }
@@ -284,6 +287,7 @@ class WebViewActivity : AppCompatActivity() {
             binding.layoutNetworkError.visibility = View.GONE
             isFillDone.set(false)
             if (targetUrl.isNotEmpty()) {
+                hasLoadedRealUrl = true
                 // Q2 修复：重试同样附加中文请求头
                 binding.webView.loadUrl(targetUrl, zhHeaders)
             }
