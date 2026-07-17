@@ -26,7 +26,6 @@
 	import com.zhongshan.meterreader.databinding.ActivityMainBinding
 	import com.zhongshan.meterreader.util.BinarizeResourcePool
 	import com.zhongshan.meterreader.util.StorageAndImageUtils
-	import com.yalantis.ucrop.UCrop
 	import kotlinx.coroutines.Dispatchers
 	import kotlinx.coroutines.launch
 	import kotlinx.coroutines.withContext
@@ -38,13 +37,17 @@
 	    private lateinit var binding: ActivityMainBinding
 	    private val binarizePool = BinarizeResourcePool()
 	    private val executor = Executors.newSingleThreadExecutor()
-	    private var cameraProvider: ProcessCameraProvider? = null
-	    private var isStreaming = false
-	    private var selectedTemplate: DeviceTemplate? = null
-	    private var currentScreenIndex = 0
-	    private var pendingCameraUri: Uri? = null
-	    private var pendingPhotoFileName: String? = null
-	    private var isProcessing = false
+    private var cameraProvider: ProcessCameraProvider? = null
+    // isStreaming / isProcessing / isCameraActive 跨分析器线程与 IO 协程线程读写，
+    // 必须加 @Volatile 保证可见性，否则可能读到旧值导致丢帧或重复处理。
+    @Volatile
+    private var isStreaming = false
+    private var selectedTemplate: DeviceTemplate? = null
+    private var currentScreenIndex = 0
+    private var pendingCameraUri: Uri? = null
+    private var pendingPhotoFileName: String? = null
+    @Volatile
+    private var isProcessing = false
 	    @Volatile
 	    private var isCameraActive = false
 	    private val plateGroupDefs = mapOf(
@@ -121,27 +124,6 @@
 	                }
 	                setProcessing(false)
 	            }
-	        }
-	    }
-	    private val uCropLauncher = registerForActivityResult(
-	        ActivityResultContracts.StartActivityForResult()
-	    ) { result ->
-	        // 【修改点2】退出裁剪时恢复相机
-	        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-	            if (!isCameraActive) startCamera()
-	        }
-	        if (result.resultCode == RESULT_OK && !isProcessing) {
-	            val resultUri = UCrop.getOutput(result.data!!)
-	            if (resultUri != null) {
-	                lifecycleScope.launch {
-	                    setProcessing(true)
-	                    processImageSuspend(resultUri, ImageSource.GALLERY)
-	                    setProcessing(false)
-	                }
-	            }
-	        } else if (result.resultCode == UCrop.RESULT_ERROR) {
-	            val cropError = UCrop.getError(result.data!!)
-	            Toast.makeText(this, "裁剪失败: ${cropError?.message}", Toast.LENGTH_SHORT).show()
 	        }
 	    }
 	    override fun onCreate(savedInstanceState: Bundle?) {
@@ -429,16 +411,19 @@
 	            isStreaming = false
 	        }
 	    }
-	    private fun initOcrStateManager() {
-	        val template = selectedTemplate ?: return
-	        val relativeRois = DeviceOcrStrategy.getRelativeRois(template.machineId, currentScreenIndex)
-	        val requiredFields = relativeRois.map { it.fieldId }
-	        TraneOcrStateManager.init(requiredFields) { lockedData ->
-	            runOnUiThread {
-	                handleOcrSuccess(lockedData)
-	            }
-	        }
-	    }
+		    private fun initOcrStateManager() {
+		        val template = selectedTemplate ?: return
+		        val relativeRois = DeviceOcrStrategy.getRelativeRois(template.machineId, currentScreenIndex)
+		        val requiredFields = relativeRois.map { it.fieldId }
+		        // 触发比例：screw 机组每屏仅 4 字段，要求全锁定（1.0）；
+		        // 约克机组单屏 13 字段，OCR 难以保证全部稳定，放宽至 0.8（≥11 字段锁定即触发）。
+		        val triggerRatio = if (template.machineId.startsWith("york")) 0.8f else 1.0f
+		        TraneOcrStateManager.init(requiredFields, triggerRatio = triggerRatio) { lockedData ->
+		            runOnUiThread {
+		                handleOcrSuccess(lockedData)
+		            }
+		        }
+		    }
 	    private fun handleOcrSuccess(data: Map<String, String>) {
 	        val template = selectedTemplate ?: return
 	        try { cameraProvider?.unbindAll() } catch (_: Throwable) {}
